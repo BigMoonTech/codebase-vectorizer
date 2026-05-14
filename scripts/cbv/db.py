@@ -14,6 +14,7 @@ of the tables exist for later slices; they remain empty until then.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -238,13 +239,10 @@ def assert_schema_v1(conn: sqlite3.Connection) -> None:
       (a) the meta table doesn't exist (very old indexes)
       (b) meta.schema_version != "1.0"
     """
-    try:
-        version = read_meta(conn, "schema_version")
-    except sqlite3.OperationalError as e:
-        if "no such table" in str(e):
-            version = None
-        else:
-            raise
+    has_meta = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
+    ).fetchone()
+    version = read_meta(conn, "schema_version") if has_meta else None
     if version != SCHEMA_VERSION:
         raise LegacySchemaError(
             f"Detected an older codebase-vectorizer index "
@@ -253,3 +251,39 @@ def assert_schema_v1(conn: sqlite3.Connection) -> None:
             f"dimensions and additional tables. Run "
             f"`run.sh vectorize <repo>` (or run.ps1 on Windows) to upgrade."
         )
+
+
+def insert_embedding(
+    conn: sqlite3.Connection, chunk_id: int, int8_vec
+) -> None:
+    """Insert a 1536-dim INT8 embedding into vec_chunks for chunk_id.
+
+    `int8_vec` is a numpy ndarray (or any iterable) of int8 values whose
+    length matches the column dimension (1536 for v1.0).
+
+    sqlite-vec 0.1.x interprets raw bytes / `sqlite_vec.serialize_int8()`
+    output as float32 for INT8 columns, so we use the `vec_int8(?)` SQL
+    function with a JSON array string. This is the only insertion path
+    that works reliably across sqlite-vec 0.1.6 - 0.1.9.
+    """
+    try:
+        values = int8_vec.tolist()
+    except AttributeError:
+        values = list(int8_vec)
+    conn.execute(
+        "INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?, vec_int8(?))",
+        (chunk_id, json.dumps(values)),
+    )
+
+
+def vec_int8_param(int8_vec) -> str:
+    """Return the JSON string form of an int8 vector for use with `vec_int8(?)`.
+
+    Use in queries like:
+        WHERE embedding MATCH vec_int8(?) AND k = ?
+    """
+    try:
+        values = int8_vec.tolist()
+    except AttributeError:
+        values = list(int8_vec)
+    return json.dumps(values)

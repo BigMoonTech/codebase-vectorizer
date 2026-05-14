@@ -169,3 +169,59 @@ def test_vec_chunks_insert_int8(conn):
         "SELECT chunk_id FROM vec_chunks WHERE chunk_id = ?", (chunk_id,)
     ).fetchall()
     assert rows == [(chunk_id,)]
+
+
+def test_insert_embedding_helper(conn):
+    """db.insert_embedding centralises the vec_int8 JSON dance."""
+    if not HAVE_VEC:
+        pytest.skip()
+    import numpy as np
+    conn.execute(
+        "INSERT INTO chunks (file_path, language, kind, start_line, end_line, "
+        "start_byte, end_byte, content, content_hash, token_count) "
+        "VALUES ('z.py','python','window',1,1,0,1,'x','h2','1')"
+    )
+    chunk_id = conn.execute("SELECT id FROM chunks WHERE file_path='z.py'").fetchone()[0]
+    arr = np.full(1536, 7, dtype=np.int8)
+    db.insert_embedding(conn, chunk_id, arr)
+    conn.commit()
+    rows = conn.execute(
+        "SELECT chunk_id FROM vec_chunks WHERE chunk_id = ?", (chunk_id,)
+    ).fetchall()
+    assert rows == [(chunk_id,)]
+
+
+def test_vec_int8_param_returns_json_for_match_queries(conn):
+    """db.vec_int8_param returns the JSON string used by `WHERE e MATCH vec_int8(?)`."""
+    if not HAVE_VEC:
+        pytest.skip()
+    import numpy as np
+    # Two rows with vectors that point in clearly different directions.
+    # Cosine distance only cares about direction, so we need non-parallel
+    # vectors to validate ordering.
+    parallel = np.full(1536, 3, dtype=np.int8)
+    alternating = np.tile(np.array([3, -3], dtype=np.int8), 768)
+    for i, vec in enumerate([parallel, alternating], start=1):
+        conn.execute(
+            "INSERT INTO chunks (file_path, language, kind, start_line, end_line, "
+            "start_byte, end_byte, content, content_hash, token_count) "
+            "VALUES (?, 'python','window',1,1,0,1,'x',?,'1')",
+            (f"f{i}.py", f"h{i}"),
+        )
+        cid = conn.execute(
+            "SELECT id FROM chunks WHERE file_path = ?", (f"f{i}.py",)
+        ).fetchone()[0]
+        db.insert_embedding(conn, cid, vec)
+    conn.commit()
+
+    qparam = db.vec_int8_param(parallel)
+    assert isinstance(qparam, str)
+    assert qparam.startswith("[3, ") or qparam.startswith("[3,")
+    rows = conn.execute(
+        "SELECT chunk_id FROM vec_chunks "
+        "WHERE embedding MATCH vec_int8(?) AND k = ? ORDER BY distance",
+        (qparam, 2),
+    ).fetchall()
+    # The parallel row (chunk 1) should rank before the alternating one (chunk 2).
+    assert rows[0][0] == 1
+    assert rows[1][0] == 2
