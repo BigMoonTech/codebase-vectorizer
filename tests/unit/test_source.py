@@ -92,3 +92,26 @@ def test_clone_url(tmp_path):
     assert dest.is_dir()
     assert (dest / "README").exists()
     assert len(sha) == 40
+
+
+def test_populate_from_local_refuses_existing_dest(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("x=1\n")
+    dest = tmp_path / "existing"
+    dest.mkdir()
+    (dest / "sentinel.txt").write_text("don't destroy me\n")
+    with pytest.raises(FileExistsError):
+        source.populate_from_local(src, dest)
+    # Existing content is untouched.
+    assert (dest / "sentinel.txt").read_text() == "don't destroy me\n"
+
+
+def test_populate_from_url_refuses_existing_dest(tmp_path):
+    """We do not call git for this check; the precondition fires first."""
+    dest = tmp_path / "existing"
+    dest.mkdir()
+    (dest / "sentinel.txt").write_text("don't destroy me\n")
+    with pytest.raises(FileExistsError):
+        source.populate_from_url("https://example.invalid/x.git", dest)
+    assert (dest / "sentinel.txt").read_text() == "don't destroy me\n"
