@@ -44,60 +44,62 @@ def run(ns: argparse.Namespace) -> int:
     db_path = repo_dir / "index.sqlite"
     conn = db.open_db(db_path)
     try:
-        db.assert_schema_v1(conn)
-    except db.LegacySchemaError as e:
-        print(str(e), file=sys.stderr)
-        return 2
+        try:
+            db.assert_schema_v1(conn)
+        except db.LegacySchemaError as e:
+            print(str(e), file=sys.stderr)
+            return 2
 
-    # Stage 1a: BM25.
-    bm25_hits = _bm25(conn, ns.question, limit=50)
+        # Stage 1a: BM25.
+        bm25_hits = _bm25(conn, ns.question, limit=50)
 
-    # Stage 1b: dense (uses vec_int8 SQL function per sqlite-vec 0.1.x).
-    emb = embedder.make_embedder()
-    qv = emb.embed([ns.question])[0]
-    q_int8 = quantize.quantize_int8(qv.reshape(1, -1))[0]
-    dense_hits = _dense(conn, q_int8, limit=50)
+        # Stage 1b: dense (uses vec_int8 SQL function per sqlite-vec 0.1.x).
+        emb = embedder.make_embedder()
+        qv = emb.embed([ns.question])[0]
+        q_int8 = quantize.quantize_int8(qv.reshape(1, -1))[0]
+        dense_hits = _dense(conn, q_int8, limit=50)
 
-    # Stage 2: RRF fuse.
-    fused = _rrf([bm25_hits, dense_hits], k=RRF_K)
-    top = fused[: ns.top_k]
+        # Stage 2: RRF fuse.
+        fused = _rrf([bm25_hits, dense_hits], k=RRF_K)
+        top = fused[: ns.top_k]
 
-    # Materialize result rows.
-    results = []
-    for rank, (chunk_id, score, sources) in enumerate(top, start=1):
-        row = conn.execute(
-            "SELECT file_path, kind, name, start_line, end_line, content "
-            "FROM chunks WHERE id = ?", (chunk_id,)
-        ).fetchone()
-        if row is None:
-            continue
-        file_rel, kind, name, sl, el, content = row
-        file_abs = (repo_dir / "source" / file_rel).resolve()
-        results.append({
-            "rank": rank,
-            "file_absolute": str(file_abs),
-            "file_relative": file_rel,
-            "start_line": sl,
-            "end_line": el,
-            "kind": kind,
-            "name": name,
-            "score": round(float(score), 4),
-            "preview": (content[:200] + "…") if len(content) > 200 else content,
-            "why_this_was_returned": "+".join(sorted(sources)),
-        })
+        # Materialize result rows.
+        results = []
+        for rank, (chunk_id, score, sources) in enumerate(top, start=1):
+            row = conn.execute(
+                "SELECT file_path, kind, name, start_line, end_line, content "
+                "FROM chunks WHERE id = ?", (chunk_id,)
+            ).fetchone()
+            if row is None:
+                continue
+            file_rel, kind, name, sl, el, content = row
+            file_abs = (repo_dir / "source" / file_rel).resolve()
+            results.append({
+                "rank": rank,
+                "file_absolute": str(file_abs),
+                "file_relative": file_rel,
+                "start_line": sl,
+                "end_line": el,
+                "kind": kind,
+                "name": name,
+                "score": round(float(score), 4),
+                "preview": (content[:200] + "...") if len(content) > 200 else content,
+                "why_this_was_returned": "+".join(sorted(sources)),
+            })
 
-    blob = {
-        "repo": ns.repo,
-        "query": ns.question,
-        "repo_dir": str(repo_dir),
-        "pipeline_used": "full",
-        "results": results,
-        "refined_queries": [],   # Slice 15
-        "expansion_size": 0,      # Slice 3
-    }
-    print(json.dumps(blob), flush=True)
-    conn.close()
-    return 0
+        blob = {
+            "repo": ns.repo,
+            "query": ns.question,
+            "repo_dir": str(repo_dir),
+            "pipeline_used": "full",
+            "results": results,
+            "refined_queries": [],   # Slice 15
+            "expansion_size": 0,      # Slice 3
+        }
+        print(json.dumps(blob), flush=True)
+        return 0
+    finally:
+        conn.close()
 
 
 def _bm25(conn, query: str, *, limit: int) -> Dict[int, float]:

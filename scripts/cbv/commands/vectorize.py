@@ -76,12 +76,16 @@ def run(ns: argparse.Namespace) -> int:
                 content_hash=c.content_hash, token_count=c.token_count,
             ))
 
-    print(f"[vectorize] {file_count} files → {len(chunks_buf)} chunks", flush=True)
+    print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
 
-    # Step 5: embed.
-    emb = embedder.make_embedder()
-    print(f"[vectorize] embedder: {emb.model_id}", flush=True)
-    embeddings = _embed_in_batches(emb, [c.content for c in chunks_buf], BATCH_SIZE)
+    # Step 5: embed (skip the model load if there's nothing to embed).
+    if not chunks_buf:
+        emb = embedder.StubEmbedder()
+        embeddings = emb.embed([])
+    else:
+        emb = embedder.make_embedder()
+        print(f"[vectorize] embedder: {emb.model_id}", flush=True)
+        embeddings = _embed_in_batches(emb, [c.content for c in chunks_buf], BATCH_SIZE)
 
     # Step 6: write chunks + embeddings.
     # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().

@@ -70,13 +70,23 @@ def ensure_venv() -> None:
 
 
 def deps_installed(py: Path) -> bool:
-    """Quick smoke check: import the v1.0 minimums."""
-    r = subprocess.run(
-        [str(py), "-c",
-         "import sqlite_vec, transformers, torch, llama_cpp, "
-         "numpy, pathspec, requests, huggingface_hub"],
-        capture_output=True,
+    """Quick smoke check: import the v1.0 minimums.
+
+    `llama_cpp` is optional when CUDA + torch are available (the GPU path).
+    Probe both stacks and accept either: at least one runtime embedder must
+    be importable. Without this, the bootstrap thrashes pip install on every
+    invocation when llama_cpp isn't installable (e.g. Windows without VS).
+    """
+    core_probe = (
+        "import sqlite_vec, transformers, numpy, pathspec, requests, huggingface_hub"
     )
+    if subprocess.run([str(py), "-c", core_probe], capture_output=True).returncode != 0:
+        return False
+    cpu_ok = subprocess.run([str(py), "-c", "import llama_cpp"],
+                            capture_output=True).returncode == 0
+    gpu_ok = subprocess.run([str(py), "-c", "import torch"],
+                            capture_output=True).returncode == 0
+    return cpu_ok or gpu_ok
     return r.returncode == 0
 
 
