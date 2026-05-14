@@ -76,7 +76,7 @@ The `codebase-query` skill fires, hits the local index, and Claude reads only th
 4. **Query**: hybrid retrieval. The query is embedded, FTS5 and vector searches run in parallel, results are fused with Reciprocal Rank Fusion (RRF), top-k chunks come back with absolute paths and line ranges.
 5. **Read**: Claude opens each returned file at the specified line range using `Read(file_path, offset, limit)`.
 
-## Standalone CLI (no Claude Code)
+## Standalone CLI (no Claude Code needed)
 
 The scripts work without the plugin too:
 
