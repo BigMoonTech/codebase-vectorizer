@@ -1,0 +1,10 @@
+# codebase-vectorizer v1.0 Slice 1 dependencies.
+# Pin minor-version floors per spec; let pip resolve the latest compatible.
+sqlite-vec>=0.1.6
+transformers>=4.42
+torch>=2.3
+llama-cpp-python>=0.2.80
+huggingface_hub>=0.23.0
+numpy>=1.26
+pathspec>=0.12
+requests>=2.31.0
