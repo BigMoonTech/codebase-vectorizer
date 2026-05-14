@@ -4,8 +4,16 @@ A Claude Code plugin that turns any public GitHub repo (or local folder) into a 
 
 ## What it does
 
-- **`/vectorize-repo` skill** — clone, chunk, embed, and store a repo in a local SQLite database (FTS5 keyword index + `sqlite-vec` ANN vector index). Then triggers one LLM pass to write a top-level `ARCHITECTURE.md`.
-- **`/codebase-query` skill** — auto-triggers when you ask about an indexed codebase. Runs a hybrid keyword + semantic search, returns top file:line ranges, and Claude reads only those.
+- **`vectorize-repo` skill** — clone, chunk, embed, and store a repo in a local
+  SQLite database (FTS5 keyword index + `sqlite-vec` ANN vector index). Slice 1
+  uses line-aware text-window chunking and `jinaai/jina-code-embeddings-1.5b`
+  (1536-dim, INT8-quantized). Tree-sitter + cAST chunking, symbol graph, flow
+  graph, concept clusters, and the `codebase-relate` skill ship in subsequent
+  slices.
+- **`codebase-query` skill** — auto-triggers on questions about an indexed
+  codebase. Runs BM25 + dense KNN + Reciprocal Rank Fusion and returns the
+  top-k file:line ranges. Cross-encoder rerank, graph expansion, fast-lane
+  routing, and confidence-based query refinement land in later slices.
 
 Reading a codebase from scratch every time you ask Claude a question burns tens of thousands of tokens. After indexing, the same question costs a few hundred: the query tool returns the exact file ranges to read, and Claude opens just those.
 
@@ -27,7 +35,10 @@ Replace `<git-url-of-this-repo>` with whatever you push this repo to (e.g. `http
   - Debian/Ubuntu/WSL: `sudo apt install python3.12 python3.12-venv`
   - macOS: `brew install python@3.12`
 - **`git` on PATH** for cloning GitHub URLs.
-- **Internet on first use** for ~50 MB of Python wheels (one-time, cached) and ~130 MB for the BGE-small embedding model (one-time, cached under `~/.cache/huggingface/`). Subsequent runs are fully offline.
+- **Internet on first use** for ~250 MB of Python wheels (one-time, cached) and
+  ~750 MB for the embedding model (`jinaai/jina-code-embeddings-1.5b` GGUF
+  INT4, one-time, cached under `~/.cache/huggingface/`). Subsequent runs are
+  fully offline.
 
 ## Where data lives
 
@@ -68,13 +79,23 @@ In Archon, how does the orchestrator handle workflow dispatch?
 
 The `codebase-query` skill fires, hits the local index, and Claude reads only the file ranges that matched.
 
-## How retrieval works
+## How retrieval works (Slice 1)
 
-1. **Chunking**: language-aware regex splits Python/JS/TS/Go/Rust/Java/etc. by function & class boundaries. Markdown by headings. Everything else by 150-line sliding windows. Each chunk knows its file path, kind (function/class/section/window), name, and exact line range.
-2. **Embeddings**: every chunk is embedded with `BAAI/bge-small-en-v1.5` (384-dim) via [`fastembed`](https://github.com/qdrant/fastembed) on ONNX. Local CPU, no API keys, no Docker, no servers.
-3. **Storage**: three tables in one SQLite file — `chunks` (canonical), `chunks_fts` (FTS5 BM25), `vec_chunks` (`sqlite-vec` ANN). Same `rowid` across all three.
-4. **Query**: hybrid retrieval. The query is embedded, FTS5 and vector searches run in parallel, results are fused with Reciprocal Rank Fusion (RRF), top-k chunks come back with absolute paths and line ranges.
-5. **Read**: Claude opens each returned file at the specified line range using `Read(file_path, offset, limit)`.
+1. **Chunking**: line-aware text-window splitter (1500-byte budget) preserves
+   the concat == file invariant. Future slices use tree-sitter + cAST.
+2. **Embeddings**: every chunk is embedded with `jinaai/jina-code-embeddings-1.5b`
+   (1536-dim, INT8-quantized). GPU path uses transformers FP16; CPU path uses
+   `llama-cpp-python` with GGUF INT4. Local, no API keys.
+3. **Storage**: full v1.0 schema (ten tables) created at index time;
+   Slice 1 populates `chunks` (canonical), `chunks_fts` (FTS5 BM25),
+   `vec_chunks` (`sqlite-vec` INT8 ANN), and `meta`. Same `rowid` across
+   `chunks` and the FTS view; `chunk_id` links to `vec_chunks`.
+4. **Query**: the query is embedded; BM25 and dense KNN run top-50 each, then
+   Reciprocal Rank Fusion picks the top-k. Output is v1.0-shape JSON with
+   `pipeline_used`, `refined_queries`, and `expansion_size` keys (the latter
+   two stay zero/empty until later slices).
+5. **Read**: Claude opens each returned file at the specified line range using
+   `Read(file_path, offset, limit)`.
 
 ## Standalone CLI (no Claude Code needed)
 
@@ -94,12 +115,22 @@ bash scripts/run.sh info       # print data dir + venv paths
 
 When run standalone (outside a Claude Code session), `${CLAUDE_PLUGIN_DATA}` isn't set, so data falls back to `~/.local/share/codebase-vectorizer/` on POSIX or `%LOCALAPPDATA%\codebase-vectorizer\` on Windows.
 
-## Limits & known trade-offs
+## Limits & known trade-offs (Slice 1)
 
-- **English-only embeddings**: BGE-small is trained on English. Non-English code comments still work for keyword search but may retrieve weaker semantically.
-- **Regex-based chunking**: deterministic and fast, but not as semantically precise as tree-sitter. Most function/class boundaries are caught.
-- **No incremental re-indexing**: each `vectorize` is a full re-clone + re-embed. Fine for repos up to ~50k chunks (5–15 min); larger monorepos will be slower.
+- **Text-window chunking, not tree-sitter**: chunks respect line boundaries
+  and the byte budget, but do not align to function/class boundaries. Slice 2
+  adds tree-sitter + cAST chunking.
+- **No symbol graph yet**: caller/callee questions don't get graph expansion
+  until Slice 3.
+- **No cross-encoder rerank**: top-k is RRF-only. Slice 5 adds
+  `mxbai-rerank-large-v2`.
+- **No incremental re-indexing**: each `vectorize` is a full re-clone + re-embed.
+  Slice 12 adds Merkle-based incremental updates.
+- **No fast-lane router**: identifier-like queries take the full pipeline.
+  Slice 4 adds the router + identifier trigram index.
 - **Default file limit is 1.5 MB** per file. Use `--max-file-mb` to raise it.
+- **Indexes from v0.3.0 are not auto-upgraded**: queries against them return a
+  clean "legacy schema" error; re-run `vectorize-repo` to upgrade.
 
 ## License
 
