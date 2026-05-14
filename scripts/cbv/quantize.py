@@ -6,8 +6,9 @@ Quantization steps:
   3. Clip to [-128, 127] and cast to int8.
 
 Dequantization divides by 127 and (optionally) re-normalizes. The
-roundtrip cosine similarity to the original normalized vector stays
-above 0.999 for 1536-d random vectors, which is acceptable for retrieval.
+roundtrip cosine similarity to the original normalized vector measures
+~0.996 on 1536-d random vectors — well above the threshold needed for
+ANN retrieval.
 """
 from __future__ import annotations
 
