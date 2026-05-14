@@ -1,0 +1,20 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor state
+.vscode/
+.idea/
+
+# Plugin runtime state should never live inside the repo — it goes under
+# ${CLAUDE_PLUGIN_DATA} (or the platform fallback). These entries are
+# defensive in case someone runs scripts from this directory and the
+# fallback resolves here.
+python-env/
+repos/

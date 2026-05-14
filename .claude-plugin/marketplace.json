@@ -1,0 +1,14 @@
+{
+  "name": "codebase-vectorizer-marketplace",
+  "owner": {
+    "name": "Josh Aguilar",
+    "email": "josh@lovingcarevet.net"
+  },
+  "plugins": [
+    {
+      "name": "codebase-vectorizer",
+      "source": "./",
+      "description": "Index a GitHub repo or local folder into a local SQLite + vector database, then answer codebase questions via cheap RAG lookups."
+    }
+  ]
+}
