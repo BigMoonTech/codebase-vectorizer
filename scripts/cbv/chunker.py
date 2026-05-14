@@ -55,6 +55,17 @@ SPECIAL_FILENAMES = {
 
 @dataclass(frozen=True)
 class Chunk:
+    """A single indexed chunk.
+
+    start_byte / end_byte are UTF-8 BYTE offsets into the source file,
+    NOT Unicode character indices. For non-ASCII content they will NOT
+    match `content[start_byte:end_byte]` (which uses character indices).
+    To recover the bytes from the source text use:
+        source.encode("utf-8")[start_byte:end_byte]
+    Tree-sitter chunking in Slice 2 keeps the same byte-offset semantics.
+
+    token_count is a whitespace-split estimate, not a real BPE token count.
+    """
     file_path: str
     language: str
     kind: str
@@ -156,11 +167,17 @@ def chunk_text(
 
 
 def chunk_file(path: Path, *, budget_bytes: int = 1500) -> Iterator[Chunk]:
-    """Read a file and yield chunks. UTF-8 with surrogateescape fallback."""
+    """Read a file and yield chunks.
+
+    Reads as UTF-8. On decode failure, retries with `errors="replace"` so
+    undecodable bytes become U+FFFD — those re-encode cleanly in
+    `chunk_text` (surrogateescape would raise UnicodeEncodeError on the
+    subsequent `.encode("utf-8")` calls).
+    """
     try:
         content = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        content = path.read_text(encoding="utf-8", errors="surrogateescape")
+        content = path.read_text(encoding="utf-8", errors="replace")
     yield from chunk_text(
         content,
         language=detect_language(path),

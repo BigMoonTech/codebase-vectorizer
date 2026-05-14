@@ -107,3 +107,32 @@ def test_chunk_file_reads_from_disk(tmp_path):
     assert len(chunks) == 1
     assert chunks[0].file_path == str(p)
     assert chunks[0].language == "python"
+
+
+def test_byte_ranges_are_utf8_byte_offsets():
+    """start_byte/end_byte are UTF-8 byte offsets, not character indices.
+    For non-ASCII content the chunk's `content` reproduces what those bytes
+    decode to via UTF-8; the character-indexed slice will NOT match."""
+    content = "ééé\n" * 3  # each line: 6 bytes of "é"*3 + 1 byte newline = 7 bytes
+    chunks = list(chunker.chunk_text(content, language="text",
+                                      file_path="x.txt", budget_bytes=8))
+    assert len(chunks) >= 2
+    encoded = content.encode("utf-8")
+    for c in chunks:
+        # UTF-8 byte slice into the source recovers the chunk's content exactly.
+        assert encoded[c.start_byte:c.end_byte].decode("utf-8") == c.content
+
+
+def test_chunk_file_handles_non_utf8_bytes(tmp_path):
+    """Files with bytes that don't decode as UTF-8 must not crash.
+    Undecodable bytes become U+FFFD via errors='replace'."""
+    p = tmp_path / "bad.txt"
+    # 0xFF and 0xFE are invalid UTF-8 lead bytes
+    p.write_bytes(b"hello\n\xff\xfe\nworld\n")
+    chunks = list(chunker.chunk_file(p, budget_bytes=1500))
+    assert len(chunks) == 1
+    # Sentinel content from the surrounding valid bytes survives.
+    assert "hello" in chunks[0].content
+    assert "world" in chunks[0].content
+    # content_hash must compute without raising.
+    assert len(chunks[0].content_hash) == 64
