@@ -57,3 +57,32 @@ def test_factory_default_dim_matches_v1_schema(monkeypatch):
     monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
     e = embedder.make_embedder()
     assert e.dim == 1536
+
+
+def test_stub_embedder_empty_list_returns_zero_rows():
+    e = embedder.StubEmbedder(dim=1536)
+    out = e.embed([])
+    assert out.shape == (0, 1536)
+    assert out.dtype == np.float32
+
+
+def test_make_embedder_raises_friendly_error_when_cpu_unavailable(monkeypatch):
+    """If llama_cpp can't be imported, make_embedder() must raise a clear
+    RuntimeError rather than letting ImportError propagate."""
+    import builtins
+    import pytest
+    monkeypatch.delenv("CBV_STUB_EMBEDDER", raising=False)
+    monkeypatch.setenv("CBV_FORCE_CPU", "1")
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "llama_cpp":
+            raise ImportError("simulated: llama_cpp not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(RuntimeError) as exc:
+        embedder.make_embedder()
+    msg = str(exc.value)
+    assert "llama-cpp-python" in msg
+    assert "CBV_STUB_EMBEDDER" in msg

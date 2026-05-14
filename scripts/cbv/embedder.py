@@ -129,11 +129,14 @@ class JinaCodeCPUEmbedder(Embedder):
         self.dim = DEFAULT_DIM
 
     def embed(self, texts: List[str]) -> np.ndarray:
+        # Note: `batch_size` here is iteration chunking, not true batched
+        # inference. llama-cpp-python's `create_embedding` accepts a single
+        # text at a time on the versions we target. If a future version
+        # exposes batched embedding, switch to that.
         out_rows = []
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i:i + self.batch_size]
             for t in batch:
-                # llama-cpp's create_embedding returns one row per input.
                 r = self.llm.create_embedding(t)
                 vec = np.array(r["data"][0]["embedding"], dtype=np.float32)
                 norm = np.linalg.norm(vec) or 1.0
@@ -143,13 +146,27 @@ class JinaCodeCPUEmbedder(Embedder):
         return np.stack(out_rows, axis=0)
 
 
+def _cpu_embedder_or_friendly_error() -> "JinaCodeCPUEmbedder":
+    try:
+        return JinaCodeCPUEmbedder()
+    except ImportError as e:
+        raise RuntimeError(
+            "codebase-vectorizer needs `llama-cpp-python` for the CPU embedder "
+            "path, but it's not importable. Either:\n"
+            "  - install it: `pip install llama-cpp-python` (Windows: requires "
+            "VS Build Tools or a prebuilt wheel)\n"
+            "  - run with CUDA available so the GPU path is used\n"
+            "  - set CBV_STUB_EMBEDDER=1 for tests"
+        ) from e
+
+
 def make_embedder() -> Embedder:
     """Factory honoring CBV_STUB_EMBEDDER then CBV_FORCE_CPU then auto-detect."""
     if os.environ.get("CBV_STUB_EMBEDDER") == "1":
         return StubEmbedder()
 
     if os.environ.get("CBV_FORCE_CPU") == "1":
-        return JinaCodeCPUEmbedder()
+        return _cpu_embedder_or_friendly_error()
 
     try:
         import torch
@@ -158,4 +175,4 @@ def make_embedder() -> Embedder:
     except ImportError:
         pass
 
-    return JinaCodeCPUEmbedder()
+    return _cpu_embedder_or_friendly_error()
