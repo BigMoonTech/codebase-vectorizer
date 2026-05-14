@@ -90,7 +90,7 @@ skills/
 ├── vectorize-repo/SKILL.md       updated to v1.0 invocation + JSON
 └── codebase-query/SKILL.md       updated to v1.0 JSON shape
 
-docs/superpowers/plans/
+docs/plans/
 └── 2026-05-14-codebase-vectorizer-v1.0-slice-1-minimal-vertical.md   THIS FILE
 ```
 
