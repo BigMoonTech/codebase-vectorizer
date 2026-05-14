@@ -31,13 +31,6 @@ def quantize_int8(x: np.ndarray) -> np.ndarray:
     return clipped.astype(np.int8)
 
 
-def quantize_int8_bytes(x: np.ndarray) -> bytes:
-    """Quantize a single 1-D embedding (or first row of a 2-D batch) to bytes
-    suitable for sqlite-vec INT8 column insertion."""
-    q = quantize_int8(x.reshape(1, -1) if x.ndim == 1 else x[:1])
-    return q.tobytes()
-
-
 def dequantize_int8(q: np.ndarray) -> np.ndarray:
     """Approximate inverse of quantize_int8 — divides by 127, returns float32."""
     return q.astype(np.float32) / 127.0

@@ -37,11 +37,15 @@ def test_quantize_normalizes_first():
     assert agree >= int(q1.size * 0.99), f"only {agree}/{q1.size} agree"
 
 
-def test_quantize_to_bytes_for_sqlite_vec():
-    x = np.ones((1, 1536), dtype=np.float32)
-    b = quantize.quantize_int8_bytes(x)
-    assert isinstance(b, bytes)
-    assert len(b) == 1536
+def test_quantize_zero_vector_no_nan(recwarn):
+    """A zero-magnitude row uses the norm=1.0 fallback to avoid divide-by-zero."""
+    x = np.zeros((1, 1536), dtype=np.float32)
+    q = quantize.quantize_int8(x)
+    assert q.dtype == np.int8
+    assert q.shape == (1, 1536)
+    assert (q == 0).all()
+    # No NaN warning leaked from the divide path.
+    assert not any("invalid value" in str(w.message).lower() for w in recwarn)
 
 
 def test_dequantize_is_approximate_inverse():
