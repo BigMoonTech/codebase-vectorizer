@@ -389,11 +389,12 @@ def _kind_for_node(language: str, node, parents) -> str:
         return "class"
 
     if node.type in function_types:
-        if any(
-            _unwrap_python_decorated_definition(parent).type in class_types
-            for parent in parents
-        ):
-            return "method"
+        for parent in reversed(parents):
+            parent_type = _unwrap_python_decorated_definition(parent).type
+            if parent_type in function_types or parent_type in method_types:
+                return "function"
+            if parent_type in class_types:
+                return "method"
         return "function"
 
     return "section"
@@ -424,6 +425,43 @@ def _semantic_representative(language: str, node, parents):
     if len(matches) == 1:
         return matches[0]
     return node, parents
+
+
+def _labelled_descendant_matches(language: str, node, parents):
+    matches = []
+
+    def visit(candidate, candidate_parents) -> None:
+        if _kind_for_node(language, candidate, candidate_parents) in LABELLED_KINDS:
+            matches.append((candidate, candidate_parents))
+            return
+        for child in candidate.children:
+            if child.end_byte > child.start_byte:
+                visit(child, candidate_parents + [candidate])
+
+    for child in node.children:
+        if child.end_byte > child.start_byte:
+            visit(child, list(parents) + [node])
+
+    return matches
+
+
+def _should_split_under_budget_container(language: str, node, parents) -> bool:
+    if _kind_for_node(language, node, parents) in LABELLED_KINDS:
+        return False
+
+    matches = _labelled_descendant_matches(language, node, parents)
+    if language in _JAVASCRIPT_FAMILY_LANGUAGES:
+        return len(matches) > 1
+
+    if language == "python" and node.type == "block" and matches:
+        named_children = [
+            child
+            for child in node.children
+            if child.is_named and child.end_byte > child.start_byte
+        ]
+        return len(named_children) > 1
+
+    return False
 
 
 def _slot_for_node(node, parents, language_name: str) -> "_Slot":
@@ -656,7 +694,10 @@ def _cast_root(root, *, source: bytes, budget: int, language_name: str) -> List[
     out: List[_Slot] = []
     parents = [root]
     for child in children:
-        if child.end_byte - child.start_byte > budget:
+        if (
+            child.end_byte - child.start_byte > budget
+            or _should_split_under_budget_container(language_name, child, parents)
+        ):
             out.extend(
                 _cast(
                     child,
@@ -684,7 +725,11 @@ def _cast_root(root, *, source: bytes, budget: int, language_name: str) -> List[
 def _cast(node, *, parents, source: bytes, budget: int, language_name: str) -> List[_Slot]:
     """Recursive split-then-merge for one non-root node."""
     size = node.end_byte - node.start_byte
-    if size <= budget:
+    if size <= budget and not _should_split_under_budget_container(
+        language_name,
+        node,
+        parents,
+    ):
         return [_slot_for_node(node, parents, language_name)]
 
     children = [c for c in node.children if c.end_byte > c.start_byte]
@@ -694,7 +739,10 @@ def _cast(node, *, parents, source: bytes, budget: int, language_name: str) -> L
     next_parents = list(parents) + [node]
     out: List[_Slot] = []
     for child in children:
-        if child.end_byte - child.start_byte > budget:
+        if (
+            child.end_byte - child.start_byte > budget
+            or _should_split_under_budget_container(language_name, child, next_parents)
+        ):
             out.extend(
                 _cast(
                     child,
@@ -829,6 +877,11 @@ def _should_merge_slots(
             )
         ):
             return True
+        return False
+    if (
+        (left_kind and right.node is not None and not right_kind)
+        or (right_kind and left.node is not None and not left_kind)
+    ):
         return False
     if left_kind and right_kind:
         return False

@@ -34,6 +34,15 @@ def _find_first_node_with_parents(root, node_type: str):
     raise AssertionError(f"could not find node type {node_type!r}")
 
 
+def _assert_concat_and_contiguous(chunks, source: bytes):
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == source
+    assert chunks, "expected at least one chunk"
+    assert chunks[0].start_byte == 0
+    assert chunks[-1].end_byte == len(source)
+    for left, right in zip(chunks, chunks[1:]):
+        assert left.end_byte == right.start_byte
+
+
 def test_byte_to_line_simple():
     src = b"a\nbb\nccc\n"
     line_starts = cast_chunker._line_starts(src)
@@ -849,6 +858,65 @@ def test_assigned_function_chunks_use_property_name(
     ]
     assert matching_chunks, chunks
     assert any(chunk.ast_path == expected_path for chunk in matching_chunks)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        b"const handlers = { login: () => 1, logout: () => 2 };\n",
+        b"const login = () => 1, logout = () => 2;\n",
+    ],
+)
+def test_multiple_assigned_functions_emit_distinct_chunks(source):
+    chunks = cast_chunker.cast_chunks(
+        _parse_language("javascript", source),
+        source,
+        language_name="javascript",
+        file_path="x.js",
+        budget_bytes=1500,
+    )
+
+    _assert_concat_and_contiguous(chunks, source)
+    function_paths = [
+        (chunk.name, chunk.ast_path)
+        for chunk in chunks
+        if chunk.kind == "function"
+    ]
+    assert ("login", "module/function[login]") in function_paths
+    assert ("logout", "module/function[logout]") in function_paths
+
+
+def test_nested_helper_function_inside_method_keeps_function_attribution():
+    source = (
+        b"class C:\n"
+        b"    def outer(self):\n"
+        b"        def inner():\n"
+        b"            return 1\n"
+        b"        return inner()\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(source),
+        source,
+        language_name="python",
+        file_path="x.py",
+        budget_bytes=80,
+    )
+
+    _assert_concat_and_contiguous(chunks, source)
+    paths = [chunk.ast_path for chunk in chunks]
+    assert any(path.startswith("module/class[C]/method[outer]") for path in paths)
+    assert any(
+        chunk.kind in ("function", "section")
+        and "def inner" in chunk.content
+        and chunk.ast_path.startswith("module/class[C]/method[outer]/function[inner]")
+        for chunk in chunks
+    ), chunks
+    assert not any(path.endswith("method[inner]") for path in paths)
+    assert not any(
+        "return inner()" in chunk.content
+        and "function[inner]" in chunk.ast_path
+        for chunk in chunks
+    )
 
 
 def test_typescript_interface_and_method_signature_are_class_and_method():
