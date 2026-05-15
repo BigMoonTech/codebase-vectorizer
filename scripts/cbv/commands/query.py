@@ -29,9 +29,14 @@ import numpy as np
 from cbv import db, embedder, paths, quantize, query_router
 
 RRF_K = 60  # standard RRF damping constant
+GRAPH_EDGE_KINDS = ("calls", "imports", "inherits", "references")
 
 
 def run(ns: argparse.Namespace) -> int:
+    if not ns.question.strip():
+        print("query question must not be empty", file=sys.stderr)
+        return 2
+
     repo_dir = paths.find_repo(ns.repo)
     if repo_dir is None:
         print(
@@ -166,7 +171,9 @@ def _dense(conn, q_int8: np.ndarray, *, limit: int) -> Dict[int, float]:
 
 
 def _symbol_exact(conn, query: str, *, limit: int) -> dict[int, float]:
-    q = query.strip().split()[-1]
+    q = _query_symbol_token(query)
+    if not q:
+        return {}
     rows = conn.execute(
         "SELECT DISTINCT chunk_id FROM nodes "
         "WHERE chunk_id IS NOT NULL AND kind != 'block' "
@@ -179,7 +186,10 @@ def _symbol_exact(conn, query: str, *, limit: int) -> dict[int, float]:
 def _trigram(conn, query: str, *, limit: int) -> dict[int, float]:
     from cbv import identifiers
 
-    grams = sorted(identifiers.trigrams(query.strip().split()[-1]))
+    q = _query_symbol_token(query)
+    if not q:
+        return {}
+    grams = sorted(identifiers.trigrams(q))
     if not grams:
         return {}
     placeholders = ",".join("?" for _ in grams)
@@ -196,16 +206,25 @@ def _graph_expand(conn, seed_chunk_ids: list[int], *, per_node: int = 3) -> dict
     if not seed_chunk_ids:
         return {}
     placeholders = ",".join("?" for _ in seed_chunk_ids)
+    kind_placeholders = ",".join("?" for _ in GRAPH_EDGE_KINDS)
     rows = conn.execute(
-        f"SELECT DISTINCT neighbor.chunk_id, edge.weight "
+        f"SELECT neighbor.chunk_id, MAX(edge.weight) AS score "
         f"FROM nodes seed "
         f"JOIN edges edge ON edge.src = seed.id OR edge.dst = seed.id "
         f"JOIN nodes neighbor ON neighbor.id = CASE WHEN edge.src = seed.id THEN edge.dst ELSE edge.src END "
         f"WHERE seed.chunk_id IN ({placeholders}) AND neighbor.chunk_id IS NOT NULL "
+        f"AND edge.kind IN ({kind_placeholders}) "
+        f"GROUP BY neighbor.chunk_id "
+        f"ORDER BY score DESC "
         f"LIMIT ?",
-        (*seed_chunk_ids, max(1, len(seed_chunk_ids) * per_node)),
+        (*seed_chunk_ids, *GRAPH_EDGE_KINDS, max(1, len(seed_chunk_ids) * per_node)),
     ).fetchall()
     return {int(row[0]): float(row[1]) for row in rows}
+
+
+def _query_symbol_token(query: str) -> str:
+    parts = query.strip().split()
+    return parts[-1] if parts else ""
 
 
 def _rrf(

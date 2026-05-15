@@ -53,6 +53,30 @@ def test_fast_lane_returns_fast_without_loading_dense_embedder(indexed, capsys, 
     assert blob["results"]
 
 
+def test_auto_identifier_query_uses_fast_lane_without_loading_dense_embedder(
+    indexed,
+    capsys,
+    monkeypatch,
+):
+    def fail_make_embedder():
+        raise AssertionError("auto identifier fast lane must not load dense embedder")
+
+    monkeypatch.setattr(query_cmd.embedder, "make_embedder", fail_make_embedder)
+
+    ns = argparse.Namespace(
+        repo=indexed,
+        question="authenticate_user",
+        top_k=5,
+        lane="auto",
+    )
+    rc = query_cmd.run(ns)
+    assert rc == 0
+    blob = _query_blob(capsys)
+    assert blob["pipeline_used"] == "fast"
+    assert blob["expansion_size"] == 0
+    assert blob["results"]
+
+
 def test_full_lane_uses_graph_expansion(indexed, capsys):
     ns = argparse.Namespace(
         repo=indexed,

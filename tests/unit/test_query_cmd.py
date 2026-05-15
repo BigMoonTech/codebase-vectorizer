@@ -91,6 +91,14 @@ def test_query_missing_repo_clean_error(monkeypatch, tmp_path, capsys):
     assert "nonexistent" in err
 
 
+def test_query_blank_question_returns_clean_error(indexed_repo, capsys):
+    ns = argparse.Namespace(repo=indexed_repo, question="   ", top_k=3, lane="auto")
+    rc = query_cmd.run(ns)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "query question must not be empty" in err
+
+
 def test_query_legacy_schema_clean_error(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
     # Create a fake v0.3.0-shaped index: chunks table, no meta.
@@ -107,3 +115,77 @@ def test_query_legacy_schema_clean_error(monkeypatch, tmp_path, capsys):
     assert rc != 0
     err = capsys.readouterr().err
     assert "older codebase-vectorizer index" in err
+
+
+def test_symbol_helpers_tolerate_blank_query():
+    conn = sqlite3.connect(":memory:")
+    try:
+        assert query_cmd._symbol_exact(conn, "   ", limit=10) == {}
+        assert query_cmd._trigram(conn, "   ", limit=10) == {}
+    finally:
+        conn.close()
+
+
+def test_graph_expand_ignores_contains_edges():
+    conn = _graph_conn()
+    try:
+        _insert_node(conn, node_id=1, kind="file", chunk_id=10)
+        _insert_node(conn, node_id=2, kind="function", chunk_id=20)
+        _insert_node(conn, node_id=3, kind="function", chunk_id=30)
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, ?, ?)",
+            (1, 2, "contains", 1.0),
+        )
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, ?, ?)",
+            (1, 3, "contains", 1.0),
+        )
+
+        assert query_cmd._graph_expand(conn, [20]) == {}
+    finally:
+        conn.close()
+
+
+def test_graph_expand_uses_max_score_for_duplicate_neighbor_chunks():
+    conn = _graph_conn()
+    try:
+        _insert_node(conn, node_id=1, kind="function", chunk_id=10)
+        _insert_node(conn, node_id=2, kind="function", chunk_id=20)
+        _insert_node(conn, node_id=3, kind="function", chunk_id=20)
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, ?, ?)",
+            (1, 2, "calls", 3.0),
+        )
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, ?, ?)",
+            (1, 3, "references", 1.0),
+        )
+
+        assert query_cmd._graph_expand(conn, [10]) == {20: 3.0}
+    finally:
+        conn.close()
+
+
+def _graph_conn():
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE nodes ("
+        "id INTEGER PRIMARY KEY, "
+        "kind TEXT NOT NULL, "
+        "chunk_id INTEGER)"
+    )
+    conn.execute(
+        "CREATE TABLE edges ("
+        "src INTEGER NOT NULL, "
+        "dst INTEGER NOT NULL, "
+        "kind TEXT NOT NULL, "
+        "weight REAL DEFAULT 1.0)"
+    )
+    return conn
+
+
+def _insert_node(conn, *, node_id: int, kind: str, chunk_id: int):
+    conn.execute(
+        "INSERT INTO nodes (id, kind, chunk_id) VALUES (?, ?, ?)",
+        (node_id, kind, chunk_id),
+    )

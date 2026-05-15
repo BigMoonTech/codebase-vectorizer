@@ -9,8 +9,10 @@ def route(query: str, forced: str = "auto") -> str:
     if forced in {"fast", "full"}:
         return forced
     q = query.strip()
+    if not q:
+        return "full"
     lowered = q.lower()
-    if q.startswith("regex:"):
+    if lowered.startswith("regex:"):
         return "fast"
     for prefix in ("find ", "where is "):
         if lowered.startswith(prefix) and IDENT.match(q[len(prefix):].strip()):
