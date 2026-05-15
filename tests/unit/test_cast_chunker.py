@@ -522,3 +522,55 @@ def test_method_kind_inside_class(language_name, source, expected_name):
     assert len(chunks) == 1
     assert chunks[0].kind == "class"
     assert chunks[0].name == expected_name
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "budget_bytes", "method_name"),
+    [
+        (
+            "javascript",
+            b"class C { tick() { return 1; } tock() { return 2; } }\n",
+            20,
+            "tick",
+        ),
+        (
+            "typescript",
+            b"class C { tick(): number { return 1; } tock(): number { return 2; } }\n",
+            28,
+            "tick",
+        ),
+        (
+            "java",
+            b"class C { int tick() { return 1; } int tock() { return 2; } }\n",
+            24,
+            "tick",
+        ),
+        (
+            "csharp",
+            b"class C { int Tick() { return 1; } int Tock() { return 2; } }\n",
+            24,
+            "Tick",
+        ),
+    ],
+)
+def test_method_kind_emitted_for_split_non_python_classes(
+    language_name,
+    source,
+    budget_bytes,
+    method_name,
+):
+    tree = _parse_language(language_name, source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=budget_bytes,
+    )
+
+    method_chunks = [chunk for chunk in chunks if chunk.kind == "method"]
+    assert method_chunks, f"expected method chunk: {chunks}"
+    expected_path = f"module/class[C]/method[{method_name}]"
+    assert any(chunk.ast_path == expected_path for chunk in method_chunks), (
+        f"expected {expected_path!r}: {[chunk.ast_path for chunk in chunks]}"
+    )
