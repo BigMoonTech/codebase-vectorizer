@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation commit: `f2b9af0 slice 7 t1a: seed c parameters in flow`
+- Latest confirmed implementation commit: `d64d7ac fix ppr convergence fallback scoring`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -66,6 +66,14 @@
   - `8f5c15e slice 7 t1a: harden flow edge cases`
   - `ae20d37 slice 7 t1a: harden tree-sitter flow edges`
   - `f2b9af0 slice 7 t1a: seed c parameters in flow`
+  - `7277de3 slice 7 t2: add concept clusters`
+  - `6cde559 slice 7 t2: complete cluster label and relate paths`
+  - `0057120 slice 7 t2: harden concept cluster indexing`
+  - `e3d0a8c slice 7 t2: make cluster updates atomic`
+  - `9473f30 slice 7 t2: reuse stored vectors for clusters`
+  - `280d248 slice 7 t2: respect embedder metadata on cluster fast path`
+  - `abc28d5 slice 7 t2: guard cluster freshness and centroid metadata`
+  - `d64d7ac fix ppr convergence fallback scoring`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -74,7 +82,7 @@
 
 ## Current Working State
 
-This handoff was updated after Task 10A approval:
+This handoff was updated after Task 11 approval:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
@@ -89,6 +97,7 @@ This handoff was updated after Task 10A approval:
 - Task 9 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 10 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 10A is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 11 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -222,11 +231,28 @@ This handoff was updated after Task 10A approval:
   - `vectorize` warns when supported flow extraction returns no blocks or when produced flow nodes cannot be inserted because parent symbols are missing; symbol/file rows are preserved and orphan blocks are avoided.
   - `relate` flow verbs now return semantic CFG/DFG JSON for `paths-through`, `reaching-definitions`, `reachable-uses`, and `conditions-for`, including bounded line ranges, producing dataflow paths, guard predicates, variables, and stable result fields.
   - Flow metadata matching exact-filters parsed JSON before applying `top_k`, avoiding dropped exact matches after broad substring prefilters.
+- Task 11 landed across:
+  - `7277de3 slice 7 t2: add concept clusters`
+  - `6cde559 slice 7 t2: complete cluster label and relate paths`
+  - `0057120 slice 7 t2: harden concept cluster indexing`
+  - `e3d0a8c slice 7 t2: make cluster updates atomic`
+  - `9473f30 slice 7 t2: reuse stored vectors for clusters`
+  - `280d248 slice 7 t2: respect embedder metadata on cluster fast path`
+  - `abc28d5 slice 7 t2: guard cluster freshness and centroid metadata`
+- Task 11 review fixes include:
+  - `scripts/cbv/clusters.py` uses UMAP + HDBSCAN with soft memberships and raises backend failures instead of silently converting unexpected failures into all-noise.
+  - `LocalLLMClusterLabeler` uses `CBV_CLUSTER_LABEL_COMMAND` and falls back to deterministic labels only through `label_cluster`, appending warnings.
+  - `vectorize` writes `clusters`, `chunk_clusters`, `total_clusters`, `clusters_indexed`, and `cluster_index_version`; label subprocesses run outside the DB write transaction.
+  - Changed updates build cluster inputs from stored/new INT8 vectors, avoiding a second full-corpus model pass.
+  - Cluster backend failure aborts changed updates before committing new chunks/graph/Merkle/meta, preserving the previous index.
+  - Current no-op cluster indexes, including zero-cluster all-noise results, skip embedder loading when configured metadata still matches; metadata changes still trigger safe rebuild.
+  - `relate concept-cluster` searches label substrings first with escaped LIKE wildcards, then nearest centroids only when configured and actual embedder metadata match the index.
+  - The full-suite NetworkX 3.6.1 convergence regression is fixed in `d64d7ac`: PPR convergence fallback now uses the internal weighted PageRank implementation instead of flattening to seed scores.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Task 11: concept clusters.
+- Next action is Task 12: architecture document and bench command.
 
 ## Verified Baseline
 
@@ -296,6 +322,13 @@ Latest verification in the current session:
 - Task 10A whitespace check: `git diff --check fd2725d..HEAD` reported no issues.
 - Task 10A targeted spec re-review approved with no findings.
 - Task 10A targeted code-quality re-review approved with no findings.
+- Task 11 focused verification after final cluster freshness/centroid guard fix: `61 passed`.
+- Task 11 adjacent cluster/embedder/vectorize/full-index verification after final fix: `39 passed`.
+- Task 11 bootstrap dispatch verification after final fix: `13 passed`.
+- Task 11 full-suite regression after PPR fallback fix: `436 passed, 1 skipped`.
+- Task 11 whitespace check: `git diff --check 8ee711c..HEAD` reported no issues.
+- Task 11 final spec re-review approved with no findings.
+- Task 11 final code-quality re-review approved with no blocking findings.
 
 ## What Exists Today
 
@@ -334,6 +367,7 @@ Current Slice 3/Milestone 1 work adds:
 - Cross-repo content-hash embedding cache with `--no-cache`, hit-rate reporting, wrong-length fallback, and stale-schema migration.
 - Merkle incremental indexing with `vectorize --update`, safe Merkle backfill, retryable chunk failures, and transactional update writes.
 - Spec-complete Task 10A intra-procedural flow indexing with block nodes, `controls`/`guards`/`dataflow` edges, vectorize flow counts, Tier-A best-effort tree-sitter coverage, and semantic flow relate JSON.
+- Spec-aligned concept clusters using UMAP + HDBSCAN, stored centroids, soft chunk memberships, configurable LLM labels with warning-backed deterministic fallback, safe incremental cluster refresh, and `relate concept-cluster`.
 
 Important implementation detail:
 
@@ -349,10 +383,9 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces still to implement:
 
-1. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
-2. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
-3. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
-4. README and skill docs aligned to final behavior.
+1. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
+2. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
+3. README and skill docs aligned to final behavior.
 
 ## Completion Tracking Rule
 
@@ -378,9 +411,9 @@ User requested:
 
 Recommended next action:
 
-1. Begin Task 11 for concept clusters.
-2. After Task 11 implementation, verification, and review pass, mark Task 11 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
-3. Continue with the remaining architecture, benchmark, README, and skill-doc tasks.
+1. Begin Task 12 for `ARCHITECTURE.md` and the bench command.
+2. After Task 12 implementation, verification, and review pass, mark Task 12 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Continue with the remaining README and skill-doc tasks.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.

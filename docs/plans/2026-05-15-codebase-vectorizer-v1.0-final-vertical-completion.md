@@ -1808,7 +1808,7 @@ This task must implement the spec's L4 path: UMAP dimensionality reduction, HDBS
 - Modify: `scripts/cbv/commands/vectorize.py`
 - Modify: `scripts/cbv/commands/relate.py`
 
-- [ ] **Step 1: Implement cluster tests**
+- [x] **Step 1: Implement cluster tests**
 
 Add to `tests/unit/test_clusters.py`:
 
@@ -1840,7 +1840,7 @@ def test_label_cluster_uses_llm_and_falls_back_with_warning(monkeypatch):
     assert warning is None
 ```
 
-- [ ] **Step 2: Implement UMAP + HDBSCAN clustering and label fallback**
+- [x] **Step 2: Implement UMAP + HDBSCAN clustering and label fallback**
 
 Create `scripts/cbv/clusters.py`:
 
@@ -1914,7 +1914,7 @@ def label_cluster(samples: list[str], labeler: ClusterLabeler) -> tuple[str, str
         return label, summary, f"LLM cluster labeling failed; used deterministic label: {e}"
 ```
 
-- [ ] **Step 3: Wire vectorize**
+- [x] **Step 3: Wire vectorize**
 
 After embeddings are known:
 - Run `clusters.cluster_embeddings`.
@@ -1926,11 +1926,11 @@ After embeddings are known:
 
 Set summary `clusters_indexed` and meta `total_clusters`.
 
-- [ ] **Step 4: Add relate `concept-cluster`**
+- [x] **Step 4: Add relate `concept-cluster`**
 
 `relate <repo> concept-cluster <label-or-query>` returns chunks in matching clusters by label substring first, then by nearest centroid.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
