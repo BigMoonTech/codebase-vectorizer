@@ -266,7 +266,7 @@ class _Slot:
     """
     start_byte: int
     end_byte: int
-    node: object
+    node: Optional[object]
     parents: List[object]
 
 
@@ -399,6 +399,7 @@ def _greedy_merge_slots(slots: List[_Slot], budget: int) -> List[_Slot]:
         if slot.end_byte - current.start_byte <= budget:
             current.end_byte = slot.end_byte
             current.node = None
+            current.parents = _common_parent_stack(current.parents, slot.parents)
         else:
             out.append(current)
             current = _Slot(
@@ -411,6 +412,16 @@ def _greedy_merge_slots(slots: List[_Slot], budget: int) -> List[_Slot]:
     if current is not None:
         out.append(current)
     return out
+
+
+def _common_parent_stack(left, right) -> List[object]:
+    """Return the shared ancestor prefix for two parent stacks."""
+    common: List[object] = []
+    for left_parent, right_parent in zip(left, right):
+        if left_parent != right_parent:
+            break
+        common.append(left_parent)
+    return common
 
 
 def _tile_slots_to_range(slots: List[_Slot], start_byte: int, end_byte: int) -> None:

@@ -346,3 +346,28 @@ def test_cast_chunks_method_chunk_has_method_path():
     paths = [c.ast_path for c in chunks]
     # At least one chunk should be inside class Big (its ast_path contains 'class[Big]').
     assert any("class[Big]" in p for p in paths), f"paths: {paths}"
+
+
+def test_cast_chunks_cross_method_merge_uses_class_section_path():
+    src = (
+        b"class C:\n"
+        b"    def m1():\n"
+        b"        a = 1\n"
+        b"        a = 1\n"
+        b"        a = 1\n"
+        b"    def m2():\n"
+        b"        x = 1\n"
+        b"        y = 2\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="x.py", budget_bytes=32,
+    )
+
+    cross_method_chunks = [
+        c for c in chunks
+        if "def m2" in c.content and c.ast_path != "module/class[C]/method[m2]"
+    ]
+    assert cross_method_chunks, f"expected a cross-method merged chunk: {chunks}"
+    for chunk in cross_method_chunks:
+        assert chunk.ast_path == "module/class[C]/section"
