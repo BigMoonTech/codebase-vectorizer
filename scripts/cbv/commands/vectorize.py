@@ -27,6 +27,7 @@ from cbv import (
     embedder,
     graph,
     identifiers,
+    incremental,
     parser,
     paths,
     quantize,
@@ -49,10 +50,12 @@ def run(ns: argparse.Namespace) -> int:
     )
     src_dir = repo_dir / "source"
     repo_dir.mkdir(parents=True, exist_ok=True)
+    update_requested = getattr(ns, "update", False)
 
     print(f"[vectorize] target: {repo_dir}", flush=True)
 
-    # Step 1: resolve source. Slice 1 is always-fresh — rmtree any prior src/.
+    # Step 1: resolve source. Always refresh source/ so delta planning compares
+    # the current source bytes against the prior merkle table.
     # CORRECTION 2: rmtree before calling populate_from_X (T6 added FileExistsError guard).
     if src_dir.exists():
         shutil.rmtree(src_dir)
@@ -63,20 +66,47 @@ def run(ns: argparse.Namespace) -> int:
 
     # Step 2: open db, init schema.
     db_path = repo_dir / "index.sqlite"
-    if db_path.exists():
-        db_path.unlink()  # fresh index every run; incremental lands in Slice 12
+    incremental_mode = update_requested and db_path.exists()
+    if db_path.exists() and not incremental_mode:
+        db_path.unlink()
     conn = db.open_db(db_path)
     try:
         db.init_schema(conn)
-        # Step 3+4: walk and chunk.
-        chunks_buf: list[chunker.Chunk] = []
+
+        if incremental_mode and _needs_fresh_rebuild(conn):
+            conn.close()
+            db_path.unlink()
+            conn = db.open_db(db_path)
+            db.init_schema(conn)
+            incremental_mode = False
+
+        # Step 3: walk and plan delta.
+        entries = list(walker.walk(src_dir, max_file_mb=ns.max_file_mb))
+        file_count = len(entries)
         source_files: list[tuple[str, str]] = []
-        file_count = 0
-        warnings: list[str] = []
-        for entry in walker.walk(src_dir, max_file_mb=ns.max_file_mb):
-            file_count += 1
+        merkle_files: dict[str, tuple[str, int]] = {}
+        current_shas: dict[str, str] = {}
+        for entry in entries:
             rel_file_path = entry.relpath.as_posix()
+            sha = incremental.file_sha(entry.abspath)
+            current_shas[rel_file_path] = sha
+            merkle_files[rel_file_path] = (sha, entry.size_bytes)
             source_files.append((rel_file_path, chunker.detect_language(entry.abspath)))
+
+        paths_to_chunk = set(current_shas)
+        if incremental_mode:
+            delta = incremental.plan_delta(conn, current_shas)
+            paths_to_chunk = delta.added | delta.modified
+            _clear_symbol_graph(conn)
+            _delete_file_chunks(conn, delta.removed | delta.modified)
+
+        # Step 4: chunk only files that need writes.
+        chunks_buf: list[chunker.Chunk] = []
+        warnings: list[str] = []
+        for entry in entries:
+            rel_file_path = entry.relpath.as_posix()
+            if rel_file_path not in paths_to_chunk:
+                continue
             try:
                 file_chunks = list(chunker.chunk_file(entry.abspath))
             except Exception as e:  # broad: per-file failure must not kill the run
@@ -149,8 +179,9 @@ def run(ns: argparse.Namespace) -> int:
         # Step 6: write chunks + embeddings.
         # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().
         with conn:
+            inserted_chunk_ids: list[int] = []
             for c in chunks_buf:
-                conn.execute(
+                cur = conn.execute(
                     "INSERT INTO chunks (file_path, language, kind, name, ast_path, "
                     "start_line, end_line, start_byte, end_byte, content, "
                     "content_hash, token_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -158,9 +189,9 @@ def run(ns: argparse.Namespace) -> int:
                      c.start_line, c.end_line, c.start_byte, c.end_byte,
                      c.content, c.content_hash, c.token_count),
                 )
-            chunk_ids = [row[0] for row in conn.execute("SELECT id FROM chunks ORDER BY id").fetchall()]
-            assert len(chunk_ids) == len(chunks_buf)
-            for chunk_id, c in zip(chunk_ids, chunks_buf):
+                inserted_chunk_ids.append(int(cur.lastrowid))
+            assert len(inserted_chunk_ids) == len(chunks_buf)
+            for chunk_id, c in zip(inserted_chunk_ids, chunks_buf):
                 conn.executemany(
                     "INSERT INTO symbol_trigrams (trigram, chunk_id, symbol, occurrences) "
                     "VALUES (?, ?, ?, ?) "
@@ -168,15 +199,20 @@ def run(ns: argparse.Namespace) -> int:
                     "occurrences = occurrences + excluded.occurrences",
                     identifiers.symbol_trigram_rows(chunk_id, c.content),
             )
-            for chunk_id, q in zip(chunk_ids, quantized_embeddings):
+            for chunk_id, q in zip(inserted_chunk_ids, quantized_embeddings):
                 db.insert_embedding(conn, chunk_id, q)
+            incremental.write_merkle(conn, merkle_files)
+
+        all_chunk_ids, all_chunks = _load_chunks(conn)
+        if not incremental_mode:
+            _clear_symbol_graph(conn)
 
         nodes_symbol, edges_symbol = _write_symbol_graph(
             conn,
             src_dir,
             source_files,
-            chunks_buf,
-            chunk_ids,
+            all_chunks,
+            all_chunk_ids,
             warnings,
         )
         graph.compute_pagerank(conn, warnings=warnings)
@@ -188,12 +224,13 @@ def run(ns: argparse.Namespace) -> int:
             spec,
             commit_sha,
             emb,
-            len(chunks_buf),
+            len(all_chunks),
             nodes_symbol,
             edges_symbol,
+            incremental.merkle_root(current_shas),
         )
         manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
-                                    file_count, len(chunks_buf), warnings,
+                                    file_count, len(all_chunks), warnings,
                                     embedding_cache_hit_rate)
         (repo_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
@@ -208,7 +245,7 @@ def run(ns: argparse.Namespace) -> int:
         "db_path": str(db_path),
         "manifest_path": str(repo_dir / "manifest.json"),
         "files_indexed": file_count,
-        "chunks_indexed": len(chunks_buf),
+        "chunks_indexed": len(all_chunks),
         "nodes_symbol": nodes_symbol,
         "nodes_block": 0,       # Slice 9
         "edges_symbol": edges_symbol,
@@ -231,6 +268,83 @@ def _embed_in_batches(emb: embedder.Embedder, texts: List[str], batch: int):
     for i in range(0, len(texts), batch):
         rows.append(emb.embed(texts[i:i + batch]))
     return np.concatenate(rows, axis=0)
+
+
+def _needs_fresh_rebuild(conn) -> bool:
+    try:
+        db.assert_schema_v1(conn)
+        merkle_count = conn.execute("SELECT COUNT(*) FROM merkle_files").fetchone()[0]
+        chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    except Exception:
+        return True
+    return merkle_count == 0 and chunk_count > 0
+
+
+def _clear_symbol_graph(conn) -> None:
+    with conn:
+        conn.execute("DELETE FROM edges")
+        conn.execute("DELETE FROM nodes")
+
+
+def _delete_file_chunks(conn, file_paths: set[str]) -> None:
+    if not file_paths:
+        return
+    placeholders = ",".join("?" for _ in file_paths)
+    ordered_paths = sorted(file_paths)
+    chunk_ids = [
+        int(row[0])
+        for row in conn.execute(
+            f"SELECT id FROM chunks WHERE file_path IN ({placeholders})",
+            ordered_paths,
+        ).fetchall()
+    ]
+    if not chunk_ids:
+        return
+    chunk_placeholders = ",".join("?" for _ in chunk_ids)
+    with conn:
+        conn.execute(
+            f"DELETE FROM vec_chunks WHERE chunk_id IN ({chunk_placeholders})",
+            chunk_ids,
+        )
+        conn.execute(
+            f"DELETE FROM symbol_trigrams WHERE chunk_id IN ({chunk_placeholders})",
+            chunk_ids,
+        )
+        conn.execute(
+            f"DELETE FROM chunk_clusters WHERE chunk_id IN ({chunk_placeholders})",
+            chunk_ids,
+        )
+        conn.execute(
+            f"DELETE FROM chunks WHERE id IN ({chunk_placeholders})",
+            chunk_ids,
+        )
+
+
+def _load_chunks(conn) -> tuple[list[int], list[chunker.Chunk]]:
+    rows = conn.execute(
+        "SELECT id, file_path, language, kind, name, ast_path, "
+        "start_line, end_line, start_byte, end_byte, content, "
+        "content_hash, token_count FROM chunks ORDER BY id"
+    ).fetchall()
+    chunk_ids = [int(row[0]) for row in rows]
+    chunks = [
+        chunker.Chunk(
+            file_path=row[1],
+            language=row[2],
+            kind=row[3],
+            name=row[4],
+            ast_path=row[5],
+            start_line=row[6],
+            end_line=row[7],
+            start_byte=row[8],
+            end_byte=row[9],
+            content=row[10],
+            content_hash=row[11],
+            token_count=row[12],
+        )
+        for row in rows
+    ]
+    return chunk_ids, chunks
 
 
 def _write_symbol_graph(
@@ -325,6 +439,7 @@ def _write_meta(
     total_chunks,
     nodes_symbol,
     edges_symbol,
+    merkle_root_sha,
 ):
     db.write_meta(conn, "schema_version", "1.0")
     db.write_meta(conn, "indexed_at", str(int(time.time())))
@@ -340,7 +455,7 @@ def _write_meta(
     db.write_meta(conn, "total_edges_symbol", str(edges_symbol))
     db.write_meta(conn, "total_edges_flow", "0")
     db.write_meta(conn, "total_clusters", "0")
-    db.write_meta(conn, "merkle_root_sha", "")
+    db.write_meta(conn, "merkle_root_sha", merkle_root_sha)
 
 
 def _build_manifest(repo_name, repo_origin, src_dir, repo_dir, db_path,

@@ -27,6 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip files larger than this many MB (default 1.5)")
     pv.add_argument("--no-cache", action="store_true",
                     help="disable the cross-repo embedding cache")
+    pv.add_argument("--update", action="store_true",
+                    help="update an existing index instead of rebuilding when possible")
 
     pq = sub.add_parser("query", help="Query an indexed repo")
     pq.add_argument("repo", help="indexed repo name")

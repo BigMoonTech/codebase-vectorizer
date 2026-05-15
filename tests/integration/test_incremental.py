@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import pytest
+
+from cbv import db  # noqa: E402
+from cbv.commands import vectorize as vec_cmd  # noqa: E402
+
+
+@pytest.fixture
+def incremental_source(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    src = tmp_path / "incremental-src"
+    src.mkdir()
+    (src / "changed.py").write_text(
+        "def changed():\n"
+        "    return 'before'\n",
+        encoding="utf-8",
+    )
+    (src / "removed.py").write_text(
+        "def removed():\n"
+        "    return 'removed-token'\n",
+        encoding="utf-8",
+    )
+    (src / "zzz_stable.py").write_text(
+        "def stable():\n"
+        "    return 'stable-token'\n",
+        encoding="utf-8",
+    )
+    return src
+
+
+def _run_vectorize(src: Path, output_dir: Path, *, update: bool = False) -> None:
+    ns = argparse.Namespace(
+        source=str(src),
+        output_dir=str(output_dir),
+        max_file_mb=1.5,
+        no_cache=False,
+        update=update,
+    )
+    assert vec_cmd.run(ns) == 0
+
+
+def _chunk_rows(conn):
+    return conn.execute(
+        "SELECT id, file_path, content FROM chunks ORDER BY file_path, id"
+    ).fetchall()
+
+
+def test_fresh_vectorize_populates_merkle_table_and_root(incremental_source, tmp_path):
+    output_dir = tmp_path / "index"
+
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        files = {
+            row[0]: (row[1], row[2])
+            for row in conn.execute(
+                "SELECT file_path, blob_sha, size_bytes FROM merkle_files"
+            )
+        }
+        root = db.read_meta(conn, "merkle_root_sha")
+    finally:
+        conn.close()
+
+    assert set(files) == {"changed.py", "removed.py", "zzz_stable.py"}
+    assert all(len(sha) == 64 and size > 0 for sha, size in files.values())
+    assert root is not None
+    assert len(root) == 64
+    assert root != ""
+
+
+def test_update_only_rechunks_added_and_modified_files(incremental_source, tmp_path):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_rows = _chunk_rows(conn)
+        stable_id = conn.execute(
+            "SELECT id FROM chunks WHERE file_path = 'zzz_stable.py'"
+        ).fetchone()[0]
+        old_root = db.read_meta(conn, "merkle_root_sha")
+    finally:
+        conn.close()
+
+    (incremental_source / "aaa_added.py").write_text(
+        "def added():\n"
+        "    return 'added-token'\n",
+        encoding="utf-8",
+    )
+    (incremental_source / "changed.py").write_text(
+        "def changed():\n"
+        "    return 'after-token'\n",
+        encoding="utf-8",
+    )
+    (incremental_source / "removed.py").unlink()
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        after_rows = _chunk_rows(conn)
+        current_files = {
+            row[0]
+            for row in conn.execute("SELECT file_path FROM merkle_files")
+        }
+        new_root = db.read_meta(conn, "merkle_root_sha")
+        stable_id_after = conn.execute(
+            "SELECT id FROM chunks WHERE file_path = 'zzz_stable.py'"
+        ).fetchone()[0]
+        vec_orphans = conn.execute(
+            "SELECT COUNT(*) FROM vec_chunks "
+            "WHERE chunk_id NOT IN (SELECT id FROM chunks)"
+        ).fetchone()[0]
+        trigram_orphans = conn.execute(
+            "SELECT COUNT(*) FROM symbol_trigrams "
+            "WHERE chunk_id NOT IN (SELECT id FROM chunks)"
+        ).fetchone()[0]
+        total_chunks = db.read_meta(conn, "total_chunks")
+    finally:
+        conn.close()
+
+    assert stable_id_after == stable_id
+    assert "stable-token" in "\n".join(row[2] for row in after_rows)
+    assert "after-token" in "\n".join(row[2] for row in after_rows)
+    assert "added-token" in "\n".join(row[2] for row in after_rows)
+    assert "removed-token" not in "\n".join(row[2] for row in after_rows)
+    assert current_files == {"aaa_added.py", "changed.py", "zzz_stable.py"}
+    assert new_root != old_root
+    assert total_chunks == str(len(after_rows))
+    assert vec_orphans == 0
+    assert trigram_orphans == 0
+    assert before_rows != after_rows
