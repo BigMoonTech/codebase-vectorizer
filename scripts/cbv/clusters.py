@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 from collections import Counter
 from dataclasses import dataclass
 
@@ -20,7 +23,33 @@ class ClusterLabeler:
 
 class LocalLLMClusterLabeler(ClusterLabeler):
     def label(self, samples: list[str]) -> tuple[str, str]:
-        raise RuntimeError("local LLM labeler is not configured")
+        command = os.environ.get("CBV_CLUSTER_LABEL_COMMAND")
+        if not command:
+            raise RuntimeError("local LLM labeler is not configured")
+        timeout = float(os.environ.get("CBV_CLUSTER_LABEL_TIMEOUT_SECONDS", "30"))
+        payload = json.dumps({"samples": samples[:5]})
+        result = subprocess.run(
+            command,
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            shell=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"cluster label command failed: {detail}")
+        try:
+            parsed = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"cluster label command returned invalid JSON: {e}") from e
+        label = parsed.get("label") if isinstance(parsed, dict) else None
+        summary = parsed.get("summary") if isinstance(parsed, dict) else None
+        if not isinstance(label, str) or not label.strip():
+            raise RuntimeError("cluster label command returned no label")
+        if not isinstance(summary, str) or not summary.strip():
+            raise RuntimeError("cluster label command returned no summary")
+        return label.strip(), summary.strip()
 
 
 def deterministic_label_for_texts(texts: list[str]) -> tuple[str, str]:

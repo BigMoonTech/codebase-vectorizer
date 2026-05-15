@@ -279,6 +279,44 @@ def test_concept_cluster_falls_back_to_nearest_centroid(indexed_graph, monkeypat
     assert blob["results"][0]["score"] > 0.9
 
 
+def test_concept_cluster_ignores_summary_only_match_before_centroid_fallback(
+    indexed_graph,
+    monkeypatch,
+    capsys,
+):
+    class FakeEmbedder:
+        def embed(self, texts):
+            return np.array([[0.95, 0.05, 0.0]], dtype="float32")
+
+    monkeypatch.setattr(relate.embedder, "make_embedder", lambda: FakeEmbedder())
+
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        conn.executemany(
+            "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "payments", "Login and authentication notes.", np.array([0.0, 1.0, 0.0], dtype="float32").tobytes(), 1),
+                (2, "sessions", "Session handling.", np.array([1.0, 0.0, 0.0], dtype="float32").tobytes(), 1),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, ?, ?)",
+            [
+                (3, 1, 0.93),
+                (1, 2, 0.88),
+            ],
+        )
+    conn.close()
+
+    rc, blob, _ = _run(_ns(indexed_graph, "concept-cluster", "login", top_k=1), capsys)
+
+    assert rc == 0
+    assert blob["warnings"] == []
+    assert blob["results"][0]["label"] == "sessions"
+    assert blob["results"][0]["chunk_id"] == 1
+    assert blob["results"][0]["score"] > 0.9
+
+
 def test_vectorize_writes_concept_clusters_meta_and_label_warnings(
     monkeypatch,
     tmp_path,

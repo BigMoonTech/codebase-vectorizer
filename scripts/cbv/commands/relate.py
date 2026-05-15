@@ -262,11 +262,11 @@ def _concept_cluster(conn, query: str, *, top_k: int, warnings: list[str]) -> li
         FROM clusters c
         JOIN chunk_clusters cc ON cc.cluster_id = c.id
         JOIN chunks ch ON ch.id = cc.chunk_id
-        WHERE c.label LIKE ? OR c.summary LIKE ?
+        WHERE c.label LIKE ?
         ORDER BY cc.membership DESC, c.size DESC, c.label ASC, ch.file_path ASC, ch.start_line ASC
         LIMIT ?
         """,
-        (like, like, top_k),
+        (like, top_k),
     ).fetchall()
     if not rows:
         return _concept_cluster_by_nearest_centroid(conn, query, top_k=top_k, warnings=warnings)
