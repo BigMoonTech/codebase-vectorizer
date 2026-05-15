@@ -120,6 +120,17 @@ def test_callers_and_callees_use_symbol_edges_ranked_by_pagerank(indexed_graph, 
     assert callees["results"][0]["edge_kind"] == "calls"
 
 
+def test_relate_run_accepts_direct_task_plan_namespace_shape(indexed_graph, capsys):
+    ns = argparse.Namespace(repo=indexed_graph, verb="callers", args=["authenticate_user"], top_k=10, hops=1)
+
+    rc, blob, _ = _run(ns, capsys)
+
+    assert rc == 0
+    assert blob["verb"] == "callers"
+    assert blob["query"] == "authenticate_user"
+    assert blob["results"][0]["name"] == "pkg/router.py::_handle_login"
+
+
 def test_neighbors_and_graph_alias_walk_symbol_edges(indexed_graph, capsys):
     rc, blob, _ = _run(_ns(indexed_graph, "neighbors", "authenticate_user", hops=2), capsys)
     assert rc == 0
@@ -167,6 +178,29 @@ def test_concept_cluster_clean_fallback(indexed_graph, capsys):
     assert "clusters not indexed" in blob["warnings"]
 
 
+def test_concept_cluster_returns_member_chunks_ranked_by_membership(indexed_graph, capsys):
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        conn.execute(
+            "INSERT INTO clusters (id, label, summary, centroid, size) "
+            "VALUES (1, 'auth flows', 'Authentication entry points.', X'00', 1)"
+        )
+        conn.execute(
+            "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (1, 1, 0.82)"
+        )
+    conn.close()
+
+    rc, blob, _ = _run(_ns(indexed_graph, "concept-cluster", "auth"), capsys)
+
+    assert rc == 0
+    assert blob["warnings"] == []
+    assert blob["results"][0]["label"] == "auth flows"
+    assert blob["results"][0]["chunk_id"] == 1
+    assert blob["results"][0]["file_path"] == "pkg/auth.py"
+    assert blob["results"][0]["chunk_name"] == "authenticate_user"
+    assert blob["results"][0]["membership"] == 0.82
+
+
 def test_flow_alias_clean_fallback(indexed_graph, capsys):
     rc = flow_cmd.run(argparse.Namespace(repo=indexed_graph, query="authenticate_user", top_k=10))
 
@@ -195,6 +229,54 @@ def test_flow_queries_return_indexed_flow_edges(indexed_graph, capsys):
     assert blob["warnings"] == []
     assert blob["results"][0]["name"] == "pkg/auth.py::authenticate_user#return"
     assert blob["results"][0]["edge_kind"] == "controls"
+
+
+def test_paths_through_function_returns_child_block_flow_edges(indexed_graph, capsys):
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        conn.execute("UPDATE nodes SET parent_id = 1 WHERE id = 6")
+        conn.execute(
+            "INSERT INTO nodes (id, kind, name, short_name, file_path, parent_id, chunk_id, pagerank) "
+            "VALUES (7, 'block', 'pkg/auth.py::authenticate_user#return', 'return', 'pkg/auth.py', 1, 1, 0.0)"
+        )
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (6, 7, 'controls', 1.0)"
+        )
+    conn.close()
+
+    rc, blob, _ = _run(_ns(indexed_graph, "paths-through", "authenticate_user"), capsys)
+
+    assert rc == 0
+    assert blob["warnings"] == []
+    assert blob["results"][0]["name"] == "pkg/auth.py::authenticate_user#return"
+    assert blob["results"][0]["edge_kind"] == "controls"
+
+
+def test_inheritance_chain_deduplicates_duplicate_ancestors(indexed_graph, capsys):
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        conn.executemany(
+            "INSERT INTO nodes (id, kind, name, short_name, file_path, chunk_id, pagerank) "
+            "VALUES (?, 'class', ?, ?, ?, NULL, 0.0)",
+            [
+                (8, "pkg/mixin.py::AuthMixin", "AuthMixin", "pkg/mixin.py"),
+                (9, "pkg/root.py::RootAuth", "RootAuth", "pkg/root.py"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, 'inherits', ?)",
+            [
+                (5, 8, 1.0),
+                (4, 9, 1.0),
+                (8, 9, 1.0),
+            ],
+        )
+    conn.close()
+
+    rc, blob, _ = _run(_ns(indexed_graph, "inheritance-chain", "TokenAuth"), capsys)
+
+    assert rc == 0
+    assert [r["name"] for r in blob["results"]].count("pkg/root.py::RootAuth") == 1
 
 
 @pytest.mark.parametrize("verb", ALL_RELATE_VERBS)

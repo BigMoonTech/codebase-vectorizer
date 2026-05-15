@@ -14,8 +14,7 @@ FLOW_EDGE_KINDS = ("controls", "dataflow", "guards")
 
 def run(ns: argparse.Namespace) -> int:
     repo = ns.repo
-    verb = ns.relate_verb
-    query = getattr(ns, "query", "") or ""
+    verb, query, target = _normalize_namespace(ns)
     repo_dir = paths.find_repo(repo)
     if repo_dir is None:
         print(f"No index found for repo {repo!r}.", file=sys.stderr)
@@ -32,7 +31,6 @@ def run(ns: argparse.Namespace) -> int:
         warnings: list[str] = []
         top_k = max(1, int(getattr(ns, "top_k", 10)))
         hops = max(1, int(getattr(ns, "hops", 2)))
-        target = getattr(ns, "target", None)
         results = _run_verb(conn, verb, query, target, top_k, hops, warnings)
         print(
             json.dumps(
@@ -49,6 +47,18 @@ def run(ns: argparse.Namespace) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _normalize_namespace(ns: argparse.Namespace) -> tuple[str, str, str | None]:
+    verb = getattr(ns, "relate_verb", None) or getattr(ns, "verb", "")
+    args = list(getattr(ns, "args", []) or [])
+    query = getattr(ns, "query", None)
+    if query is None:
+        query = args[0] if args else ""
+    target = getattr(ns, "target", None)
+    if target is None and len(args) > 1:
+        target = args[1]
+    return str(verb), str(query or ""), target
 
 
 def _run_verb(conn, verb: str, query: str, target: str | None, top_k: int, hops: int, warnings: list[str]) -> list[dict[str, Any]]:
@@ -156,22 +166,31 @@ def _inheritance_chain(conn, query: str, *, top_k: int) -> list[dict[str, Any]]:
         return []
     rows = conn.execute(
         """
-        WITH RECURSIVE chain(id, depth) AS (
-            SELECT dst, 1 FROM edges WHERE src = ? AND kind = 'inherits'
+        WITH RECURSIVE chain(id, depth, path) AS (
+            SELECT dst, 1, ',' || ? || ',' || dst || ',' FROM edges WHERE src = ? AND kind = 'inherits'
             UNION ALL
-            SELECT edge.dst, chain.depth + 1
+            SELECT edge.dst, chain.depth + 1, chain.path || edge.dst || ','
             FROM chain
             JOIN edges edge ON edge.src = chain.id AND edge.kind = 'inherits'
-            WHERE chain.depth < ?
+            WHERE chain.depth < ? AND instr(chain.path, ',' || edge.dst || ',') = 0
         )
         SELECT n.id, n.kind, n.name, n.short_name, n.file_path, n.start_line, n.end_line, n.chunk_id, n.pagerank, chain.depth
         FROM chain JOIN nodes n ON n.id = chain.id
         ORDER BY chain.depth ASC, n.name ASC
-        LIMIT ?
         """,
-        (node["id"], top_k, top_k),
+        (node["id"], node["id"], top_k),
     ).fetchall()
-    return [_node_result(row[:9], depth=row[9]) for row in rows]
+    results: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for row in rows:
+        node_id = int(row[0])
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        results.append(_node_result(row[:9], depth=row[9]))
+        if len(results) >= top_k:
+            break
+    return results
 
 
 def _shortest_path(conn, source: str, target: str | None, *, hops: int, warnings: list[str]) -> list[dict[str, Any]]:
@@ -227,18 +246,33 @@ def _concept_cluster(conn, query: str, *, top_k: int, warnings: list[str]) -> li
     like = f"%{query}%"
     rows = conn.execute(
         """
-        SELECT c.id, c.label, c.summary, c.size, COUNT(cc.chunk_id) AS chunks
+        SELECT c.id, c.label, c.summary, c.size,
+               ch.id, ch.file_path, ch.language, ch.kind, ch.name, ch.start_line, ch.end_line,
+               cc.membership
         FROM clusters c
-        LEFT JOIN chunk_clusters cc ON cc.cluster_id = c.id
+        JOIN chunk_clusters cc ON cc.cluster_id = c.id
+        JOIN chunks ch ON ch.id = cc.chunk_id
         WHERE c.label LIKE ? OR c.summary LIKE ?
-        GROUP BY c.id
-        ORDER BY c.size DESC, c.label ASC
+        ORDER BY cc.membership DESC, c.size DESC, c.label ASC, ch.file_path ASC, ch.start_line ASC
         LIMIT ?
         """,
         (like, like, top_k),
     ).fetchall()
     return [
-        {"cluster_id": row[0], "label": row[1], "summary": row[2], "size": row[3], "chunks": row[4]}
+        {
+            "cluster_id": row[0],
+            "label": row[1],
+            "summary": row[2],
+            "size": row[3],
+            "chunk_id": row[4],
+            "file_path": row[5],
+            "language": row[6],
+            "chunk_kind": row[7],
+            "chunk_name": row[8],
+            "start_line": row[9],
+            "end_line": row[10],
+            "membership": round(float(row[11] or 0.0), 6),
+        }
         for row in rows
     ]
 
@@ -254,29 +288,43 @@ def _flow_query(conn, verb: str, query: str, *, top_k: int, warnings: list[str])
     node = _find_symbol(conn, query, include_blocks=True)
     if node is None:
         return []
+    node_ids = _flow_node_ids(conn, node)
+    if not node_ids:
+        return []
     if verb == "reaching-definitions":
-        return _flow_edges(conn, node["id"], incoming=True, kinds=("dataflow",), top_k=top_k)
+        return _flow_edges(conn, node_ids, incoming=True, kinds=("dataflow",), top_k=top_k)
     if verb == "reachable-uses":
-        return _flow_edges(conn, node["id"], incoming=False, kinds=("dataflow",), top_k=top_k)
+        return _flow_edges(conn, node_ids, incoming=False, kinds=("dataflow",), top_k=top_k)
     if verb == "conditions-for":
-        return _flow_edges(conn, node["id"], incoming=True, kinds=("guards", "controls"), top_k=top_k)
-    return _flow_edges(conn, node["id"], incoming=None, kinds=FLOW_EDGE_KINDS, top_k=top_k)
+        return _flow_edges(conn, node_ids, incoming=True, kinds=("guards", "controls"), top_k=top_k)
+    return _flow_edges(conn, node_ids, incoming=None, kinds=FLOW_EDGE_KINDS, top_k=top_k)
 
 
-def _flow_edges(conn, node_id: int, *, incoming: bool | None, kinds: tuple[str, ...], top_k: int) -> list[dict[str, Any]]:
+def _flow_node_ids(conn, node: dict[str, Any]) -> list[int]:
+    if node["kind"] == "block":
+        return [node["id"]]
+    rows = conn.execute(
+        "SELECT id FROM nodes WHERE kind = 'block' AND parent_id = ? ORDER BY name ASC",
+        (node["id"],),
+    ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
+def _flow_edges(conn, node_ids: list[int], *, incoming: bool | None, kinds: tuple[str, ...], top_k: int) -> list[dict[str, Any]]:
+    node_placeholders = ",".join("?" for _ in node_ids)
     placeholders = ",".join("?" for _ in kinds)
     if incoming is True:
-        where = f"edge.dst = ? AND edge.kind IN ({placeholders})"
+        where = f"edge.dst IN ({node_placeholders}) AND edge.kind IN ({placeholders})"
         other_expr = "edge.src"
-        params = (node_id, *kinds, top_k)
+        params = (*node_ids, *kinds, top_k)
     elif incoming is False:
-        where = f"edge.src = ? AND edge.kind IN ({placeholders})"
+        where = f"edge.src IN ({node_placeholders}) AND edge.kind IN ({placeholders})"
         other_expr = "edge.dst"
-        params = (node_id, *kinds, top_k)
+        params = (*node_ids, *kinds, top_k)
     else:
-        where = f"(edge.src = ? OR edge.dst = ?) AND edge.kind IN ({placeholders})"
-        other_expr = "CASE WHEN edge.src = ? THEN edge.dst ELSE edge.src END"
-        params = (node_id, node_id, node_id, *kinds, top_k)
+        where = f"(edge.src IN ({node_placeholders}) OR edge.dst IN ({node_placeholders})) AND edge.kind IN ({placeholders})"
+        other_expr = f"CASE WHEN edge.src IN ({node_placeholders}) THEN edge.dst ELSE edge.src END"
+        params = (*node_ids, *node_ids, *node_ids, *kinds, top_k)
     rows = conn.execute(
         f"SELECT other.id, other.kind, other.name, other.short_name, other.file_path, "
         f"other.start_line, other.end_line, other.chunk_id, other.pagerank, edge.kind, edge.weight "
