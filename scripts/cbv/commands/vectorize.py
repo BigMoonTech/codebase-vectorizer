@@ -270,22 +270,35 @@ def run(ns: argparse.Namespace) -> int:
 
         if incremental_mode:
             existing_chunk_ids, existing_chunks = _load_chunks(conn)
-            planned_all_chunks = [
-                c
-                for _chunk_id, c in zip(existing_chunk_ids, existing_chunks)
-                if c.file_path not in delete_paths
-            ]
+            planned_all_chunks = []
+            preserved_chunk_ids: list[int] = []
+            for chunk_id, c in zip(existing_chunk_ids, existing_chunks):
+                if c.file_path in delete_paths:
+                    continue
+                planned_all_chunks.append(c)
+                preserved_chunk_ids.append(chunk_id)
             planned_all_chunks.extend(chunks_buf)
         else:
+            preserved_chunk_ids = []
             planned_all_chunks = list(chunks_buf)
 
         if skip_cluster_rebuild:
             cluster_plan = None
             clusters_indexed = _cluster_count(conn)
         else:
+            cluster_embeddings = _cluster_embedding_matrix_for_plan(
+                conn,
+                preserved_chunk_ids,
+                quantized_embeddings,
+                warnings,
+            )
+            if cluster_embeddings is None:
+                detail = warnings[-1] if warnings else "concept clustering failed"
+                print(f"[vectorize] update aborted: {detail}", flush=True)
+                return 2
             cluster_plan = _build_concept_cluster_plan(
                 planned_all_chunks,
-                emb,
+                cluster_embeddings,
                 warnings,
             )
             if cluster_plan is None:
@@ -584,6 +597,54 @@ def _load_chunks(conn) -> tuple[list[int], list[chunker.Chunk]]:
     return chunk_ids, chunks
 
 
+def _cluster_embedding_matrix_for_plan(
+    conn,
+    preserved_chunk_ids: list[int],
+    quantized_embeddings: list[np.ndarray],
+    warnings: list[str],
+) -> np.ndarray | None:
+    try:
+        embeddings = _load_embeddings_for_chunk_ids(conn, preserved_chunk_ids)
+        for idx, q in enumerate(quantized_embeddings):
+            if q is None:
+                raise RuntimeError(f"missing new embedding at position {idx}")
+            embeddings.append(np.asarray(q, dtype=np.int8))
+        return _int8_embeddings_to_float32_matrix(embeddings)
+    except Exception as e:
+        warnings.append(f"concept clustering failed: {e}")
+        return None
+
+
+def _load_embeddings_for_chunk_ids(conn, chunk_ids: list[int]) -> list[np.ndarray]:
+    if not chunk_ids:
+        return []
+    placeholders = ",".join("?" for _ in chunk_ids)
+    rows = conn.execute(
+        f"SELECT chunk_id, embedding FROM vec_chunks WHERE chunk_id IN ({placeholders})",
+        chunk_ids,
+    ).fetchall()
+    embeddings_by_id = {
+        int(chunk_id): np.frombuffer(embedding, dtype=np.int8).copy()
+        for chunk_id, embedding in rows
+    }
+    missing = [chunk_id for chunk_id in chunk_ids if chunk_id not in embeddings_by_id]
+    if missing:
+        raise RuntimeError(f"missing stored embedding for chunk_id {missing[0]}")
+    return [embeddings_by_id[chunk_id] for chunk_id in chunk_ids]
+
+
+def _int8_embeddings_to_float32_matrix(embeddings: list[np.ndarray]) -> np.ndarray:
+    if not embeddings:
+        return np.zeros((0, embedder.DEFAULT_DIM), dtype="float32")
+    matrix = np.stack(
+        [np.asarray(row, dtype=np.int8) for row in embeddings],
+        axis=0,
+    ).astype("float32", copy=False)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    np.divide(matrix, norms, out=matrix, where=norms != 0)
+    return matrix
+
+
 def _write_symbol_graph(
     conn,
     src_dir: Path,
@@ -763,18 +824,18 @@ def _write_flow_graph(
 
 def _build_concept_cluster_plan(
     chunks_buf: list[chunker.Chunk],
-    emb: embedder.Embedder | None,
+    embeddings: np.ndarray,
     warnings: list[str],
 ) -> tuple[list[tuple[int, str, str, bytes, int]], list[tuple[int, int, float]]] | None:
     if not chunks_buf:
         return [], []
 
-    cluster_embedder = emb or embedder.make_embedder()
-    embeddings = _embed_in_batches(
-        cluster_embedder,
-        [c.content for c in chunks_buf],
-        BATCH_SIZE,
-    ).astype("float32", copy=False)
+    embeddings = embeddings.astype("float32", copy=False)
+    if len(embeddings) != len(chunks_buf):
+        warnings.append(
+            "concept clustering failed: embedding count did not match planned chunks"
+        )
+        return None
     try:
         result = clusters.cluster_embeddings(embeddings)
     except Exception as e:

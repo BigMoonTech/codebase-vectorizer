@@ -221,6 +221,63 @@ def test_noop_update_with_current_clusters_does_not_reembed_for_clustering(
     assert cluster_count == 1
 
 
+def test_changed_update_reuses_stored_vectors_for_cluster_planning(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    (incremental_source / "changed.py").write_text(
+        "def changed():\n"
+        "    return 'after-token-for-cluster-vector-reuse'\n",
+        encoding="utf-8",
+    )
+
+    class CountingEmbedder(vec_cmd.embedder.StubEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.batch_sizes: list[int] = []
+
+        def embed(self, texts):
+            self.batch_sizes.append(len(texts))
+            return super().embed(texts)
+
+    counting_embedder = CountingEmbedder()
+    cluster_shapes: list[tuple[tuple[int, ...], str]] = []
+
+    def record_cluster_embeddings(embeddings, **kwargs):
+        cluster_shapes.append((embeddings.shape, str(embeddings.dtype)))
+        return vec_cmd.clusters.ClusterResult(
+            [-1 for _ in range(len(embeddings))],
+            [0.0 for _ in range(len(embeddings))],
+            embeddings,
+        )
+
+    monkeypatch.setattr(
+        vec_cmd.embedder,
+        "make_embedder",
+        lambda: counting_embedder,
+    )
+    monkeypatch.setattr(
+        vec_cmd.clusters,
+        "cluster_embeddings",
+        record_cluster_embeddings,
+    )
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert counting_embedder.batch_sizes == [1]
+    assert cluster_shapes == [((chunk_count, counting_embedder.dim), "float32")]
+
+
 def test_cluster_backend_failure_preserves_existing_clusters_on_update(
     incremental_source,
     tmp_path,
