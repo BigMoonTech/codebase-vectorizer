@@ -86,7 +86,15 @@ def run(ns: argparse.Namespace) -> int:
             )
             seed_ids = [cid for cid, _, _ in seed[:20]]
             expansion = _graph_expand(conn, seed_ids)
-            ppr_hits = graph.personalized_pagerank(conn, seed_ids, iterations=10)
+            expansion_ids = list(expansion)
+            ppr_candidate_ids = list(dict.fromkeys([*seed_ids, *expansion_ids]))
+            ppr_hits = graph.personalized_pagerank(
+                conn,
+                seed_ids,
+                expansion_chunk_ids=expansion_ids,
+                candidate_chunk_ids=ppr_candidate_ids,
+                iterations=10,
+            )
             fused = _rrf(
                 [bm25_hits, dense_hits, sym_hits, expansion, ppr_hits],
                 k=RRF_K,

@@ -91,6 +91,47 @@ def test_full_lane_uses_graph_expansion(indexed, capsys):
     assert blob["expansion_size"] > 0
     assert blob["results"]
     assert any(
-        "ppr" in r["why_this_was_returned"] or "graph" in r["why_this_was_returned"]
+        "ppr" in r["why_this_was_returned"]
         for r in blob["results"]
     )
+
+
+def test_full_lane_ppr_uses_seed_plus_expansion_as_bounded_candidates(
+    indexed,
+    capsys,
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_personalized_pagerank(
+        conn,
+        seed_chunk_ids,
+        *,
+        expansion_chunk_ids=None,
+        candidate_chunk_ids=None,
+        iterations=10,
+    ):
+        captured["seed"] = list(seed_chunk_ids)
+        captured["expansion"] = list(expansion_chunk_ids or [])
+        captured["candidates"] = list(candidate_chunk_ids or [])
+        return {chunk_id: 1.0 for chunk_id in captured["candidates"]}
+
+    monkeypatch.setattr(
+        query_cmd.graph,
+        "personalized_pagerank",
+        fake_personalized_pagerank,
+    )
+
+    ns = argparse.Namespace(
+        repo=indexed,
+        question="how does login authenticate users",
+        top_k=5,
+        lane="full",
+    )
+    rc = query_cmd.run(ns)
+    assert rc == 0
+    blob = _query_blob(capsys)
+    assert blob["expansion_size"] > 0
+    assert captured["seed"]
+    assert captured["expansion"]
+    assert set(captured["candidates"]) == set(captured["seed"]) | set(captured["expansion"])

@@ -30,6 +30,62 @@ def test_personalized_pagerank_boosts_seed_neighborhood_above_unrelated_nodes():
         conn.close()
 
 
+def test_personalized_pagerank_weights_seed_above_expansion_and_limits_results():
+    conn = _graph_conn()
+    try:
+        _insert_node(conn, node_id=1, kind="function", chunk_id=10)
+        _insert_node(conn, node_id=2, kind="function", chunk_id=20)
+        _insert_node(conn, node_id=3, kind="function", chunk_id=30)
+        _insert_node(conn, node_id=4, kind="function", chunk_id=40)
+        _insert_edge(conn, src=4, dst=3, kind="calls", weight=1.0)
+
+        scores = graph.personalized_pagerank(
+            conn,
+            [10],
+            expansion_chunk_ids=[20],
+            candidate_chunk_ids=[10, 20],
+            iterations=50,
+        )
+
+        assert set(scores) == {10, 20}
+        assert scores[10] > scores[20]
+        assert 30 not in scores
+        assert 40 not in scores
+    finally:
+        conn.close()
+
+
+def test_weighted_pagerank_dangling_mass_follows_personalization():
+    import networkx as nx
+
+    g = nx.DiGraph()
+    g.add_nodes_from([1, 2])
+
+    scores = graph._weighted_pagerank(
+        g,
+        max_iter=1,
+        personalization={1: 9.0, 2: 1.0},
+    )
+
+    assert scores[1] > scores[2]
+
+
+def test_weighted_pagerank_returns_last_non_uniform_scores_on_iteration_limit():
+    import networkx as nx
+
+    g = nx.DiGraph()
+    g.add_edge(1, 2, weight=1.0)
+    g.add_node(3)
+
+    scores = graph._weighted_pagerank(
+        g,
+        max_iter=10,
+        personalization={1: 1.0, 2: 0.25, 3: 0.0},
+    )
+
+    assert len({round(score, 8) for score in scores.values()}) > 1
+
+
 def test_personalized_pagerank_returns_empty_for_no_matching_seed_nodes():
     conn = _graph_conn()
     try:

@@ -144,9 +144,14 @@ def personalized_pagerank(
     conn,
     seed_chunk_ids: list[int],
     *,
+    expansion_chunk_ids: list[int] | None = None,
+    candidate_chunk_ids: list[int] | None = None,
     iterations: int = 10,
 ) -> dict[int, float]:
-    if not seed_chunk_ids:
+    personalization_chunk_weights = {int(chunk_id): 1.0 for chunk_id in seed_chunk_ids}
+    for chunk_id in expansion_chunk_ids or []:
+        personalization_chunk_weights.setdefault(int(chunk_id), 0.25)
+    if not personalization_chunk_weights:
         return {}
 
     import networkx as nx
@@ -160,13 +165,12 @@ def personalized_pagerank(
     if not node_to_chunk:
         return {}
 
-    seed_chunks = set(seed_chunk_ids)
-    seed_nodes = {
+    personalization_nodes = {
         node_id
         for node_id, chunk_id in node_to_chunk.items()
-        if chunk_id in seed_chunks
+        if chunk_id in personalization_chunk_weights
     }
-    if not seed_nodes:
+    if not personalization_nodes:
         return {}
 
     g = nx.DiGraph()
@@ -182,7 +186,7 @@ def personalized_pagerank(
             g.add_edge(src_id, dst_id, weight=float(weight))
 
     personalization = {
-        node_id: 1.0 if node_id in seed_nodes else 0.1
+        node_id: personalization_chunk_weights.get(node_to_chunk[node_id], 0.0)
         for node_id in g.nodes
     }
     try:
@@ -201,11 +205,18 @@ def personalized_pagerank(
             personalization=personalization,
         )
     except nx.PowerIterationFailedConvergence:
-        return {chunk_id: 1.0 for chunk_id in seed_chunks if chunk_id in node_to_chunk.values()}
+        return {
+            chunk_id: 1.0
+            for chunk_id in personalization_chunk_weights
+            if chunk_id in node_to_chunk.values()
+        }
 
+    candidates = set(candidate_chunk_ids) if candidate_chunk_ids is not None else None
     chunk_scores: dict[int, float] = {}
     for node_id, score in scores.items():
         chunk_id = node_to_chunk[int(node_id)]
+        if candidates is not None and chunk_id not in candidates:
+            continue
         chunk_scores[chunk_id] = max(chunk_scores.get(chunk_id, 0.0), float(score))
     return chunk_scores
 
@@ -234,7 +245,6 @@ def _weighted_pagerank(
                 node: float(personalization.get(node, 0.0)) / total
                 for node in nodes
             }
-    dangling_share = 1.0 / n
     out_weight = {
         node: sum(float(data.get("weight", 1.0)) for _, _, data in g.out_edges(node, data=True))
         for node in nodes
@@ -253,13 +263,12 @@ def _weighted_pagerank(
                 weight = float(data.get("weight", 1.0))
                 next_scores[dst] += alpha * scores[node] * weight / out_weight[node]
         for node in nodes:
-            next_scores[node] += alpha * dangling_total * dangling_share
+            next_scores[node] += alpha * dangling_total * personalization_scores[node]
         delta = sum(abs(next_scores[node] - scores[node]) for node in nodes)
         scores = next_scores
         if delta < n * tol:
             return scores
-    uniform = 1.0 / n
-    return {node: uniform for node in nodes}
+    return scores
 
 
 def _is_compatible_dst_kind(edge_kind: str, node_kind: str) -> bool:
