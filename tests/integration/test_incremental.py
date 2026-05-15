@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -10,7 +12,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import pytest
 
-from cbv import db  # noqa: E402
+from cbv import db, paths  # noqa: E402
 from cbv.commands import vectorize as vec_cmd  # noqa: E402
 
 
@@ -199,3 +201,117 @@ def test_update_schema_v1_missing_merkle_preserves_existing_db(
     assert preserved == "kept"
     assert after_chunks == before_chunks
     assert merkle_count == distinct_files
+
+
+def test_update_preserves_modified_file_when_rechunk_fails(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_content = conn.execute(
+            "SELECT content FROM chunks WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+        before_sha = conn.execute(
+            "SELECT blob_sha FROM merkle_files WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    (incremental_source / "changed.py").write_text(
+        "def changed():\n"
+        "    return 'after-token'\n",
+        encoding="utf-8",
+    )
+
+    real_chunk_file = vec_cmd.chunker.chunk_file
+
+    def fail_changed(path):
+        if Path(path).name == "changed.py":
+            raise RuntimeError("forced chunk failure")
+        return real_chunk_file(path)
+
+    monkeypatch.setattr(vec_cmd.chunker, "chunk_file", fail_changed)
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+    summary = json.loads(
+        [line for line in capsys.readouterr().out.splitlines() if line.strip()][-1]
+    )
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        after_content = conn.execute(
+            "SELECT content FROM chunks WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+        after_sha = conn.execute(
+            "SELECT blob_sha FROM merkle_files WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert after_content == before_content
+    assert "after-token" not in after_content
+    assert after_sha == before_sha
+    assert summary["warnings"] == ["chunk failed for changed.py: forced chunk failure"]
+
+
+def test_update_rebuilds_when_embedder_metadata_changes(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        conn.execute("CREATE TABLE preserve_me (value TEXT NOT NULL)")
+        conn.execute("INSERT INTO preserve_me (value) VALUES ('kept')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    class ChangedStub(vec_cmd.embedder.StubEmbedder):
+        model_id = "stub://changed"
+
+    monkeypatch.setattr(vec_cmd.embedder, "make_embedder", lambda: ChangedStub())
+    (incremental_source / "changed.py").write_text(
+        "def changed():\n"
+        "    return 'after-token'\n",
+        encoding="utf-8",
+    )
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        files = {
+            row[0]
+            for row in conn.execute("SELECT file_path FROM merkle_files")
+        }
+        assert conn.execute("SELECT value FROM preserve_me").fetchone()[0] == "kept"
+        assert db.read_meta(conn, "embedder_model") == "stub://changed"
+        assert files == {"changed.py", "removed.py", "zzz_stable.py"}
+        assert conn.execute(
+            "SELECT COUNT(*) FROM vec_chunks "
+            "WHERE chunk_id NOT IN (SELECT id FROM chunks)"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    cache_conn = sqlite3.connect(paths.embedding_cache_path())
+    try:
+        changed_cache_rows = cache_conn.execute(
+            "SELECT COUNT(*) FROM embedding_cache WHERE model_id = ?",
+            ("stub://changed",),
+        ).fetchone()[0]
+    finally:
+        cache_conn.close()
+
+    assert changed_cache_rows == chunk_count

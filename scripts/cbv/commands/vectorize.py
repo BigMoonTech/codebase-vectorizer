@@ -89,58 +89,56 @@ def run(ns: argparse.Namespace) -> int:
             source_files.append((rel_file_path, chunker.detect_language(entry.abspath)))
 
         paths_to_chunk = set(current_shas)
+        missing_prior_merkle = False
+        prior_merkle_files: dict[str, tuple[str, int]] = {}
+        delta = None
         if incremental_mode:
             missing_prior_merkle = _missing_prior_merkle(conn)
+            prior_merkle_files = _read_merkle_files(conn)
             delta = incremental.plan_delta(conn, current_shas)
             paths_to_chunk = (
                 set(current_shas)
                 if missing_prior_merkle
                 else delta.added | delta.modified
             )
-            _clear_symbol_graph(conn)
-            delete_paths = delta.removed | delta.modified
-            if missing_prior_merkle:
-                delete_paths |= _indexed_file_paths(conn)
-            _delete_file_chunks(conn, delete_paths)
 
         # Step 4: chunk only files that need writes.
-        chunks_buf: list[chunker.Chunk] = []
         warnings: list[str] = []
-        for entry in entries:
-            rel_file_path = entry.relpath.as_posix()
-            if rel_file_path not in paths_to_chunk:
-                continue
-            try:
-                file_chunks = list(chunker.chunk_file(entry.abspath))
-            except Exception as e:  # broad: per-file failure must not kill the run
-                warnings.append(f"chunk failed for {entry.relpath}: {e}")
-                continue
-            # rewrite file_path to be repo-relative for storage
-            for c in file_chunks:
-                chunks_buf.append(chunker.Chunk(
-                    file_path=rel_file_path,
-                    language=c.language, kind=c.kind, name=c.name,
-                    ast_path=c.ast_path, start_line=c.start_line,
-                    end_line=c.end_line, start_byte=c.start_byte,
-                end_byte=c.end_byte, content=c.content,
-                content_hash=c.content_hash, token_count=c.token_count,
-            ))
-
-        print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
+        chunks_buf, chunked_paths = _chunk_selected_entries(
+            entries,
+            paths_to_chunk,
+            warnings,
+        )
 
         # Step 5: embed cache misses (skip the model load if there's nothing to embed).
         embedding_cache_hit_rate = 0.0
         quantized_embeddings = []
+        force_full_rebuild = False
         if not chunks_buf:
             embedder_model, embedder_dim, embedder_quant = _metadata_for_empty_update(
                 conn,
                 incremental_mode,
             )
+            print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
         else:
             emb = embedder.make_embedder()
             embedder_model = emb.model_id
             embedder_dim = str(emb.dim)
             embedder_quant = "int8"
+            if incremental_mode and _embedder_metadata_mismatch(
+                conn,
+                embedder_model,
+                embedder_dim,
+                embedder_quant,
+            ):
+                force_full_rebuild = True
+                warnings = []
+                chunks_buf, chunked_paths = _chunk_selected_entries(
+                    entries,
+                    set(current_shas),
+                    warnings,
+                )
+            print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
             print(f"[vectorize] embedder: {emb.model_id}", flush=True)
             cache_conn = None
             if not getattr(ns, "no_cache", False):
@@ -187,6 +185,28 @@ def run(ns: argparse.Namespace) -> int:
 
         # Step 6: write chunks + embeddings.
         # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().
+        if incremental_mode:
+            if force_full_rebuild or missing_prior_merkle:
+                delete_paths = _indexed_file_paths(conn)
+                merkle_to_write = {
+                    rel: merkle_files[rel]
+                    for rel in chunked_paths
+                }
+            else:
+                assert delta is not None
+                delete_paths = delta.removed | (delta.modified & chunked_paths)
+                merkle_to_write = dict(prior_merkle_files)
+                for rel in delta.removed:
+                    merkle_to_write.pop(rel, None)
+                for rel in chunked_paths:
+                    merkle_to_write[rel] = merkle_files[rel]
+        else:
+            delete_paths = set()
+            merkle_to_write = merkle_files
+
+        _clear_symbol_graph(conn)
+        _delete_file_chunks(conn, delete_paths)
+
         with conn:
             inserted_chunk_ids: list[int] = []
             for c in chunks_buf:
@@ -210,11 +230,9 @@ def run(ns: argparse.Namespace) -> int:
             )
             for chunk_id, q in zip(inserted_chunk_ids, quantized_embeddings):
                 db.insert_embedding(conn, chunk_id, q)
-            incremental.write_merkle(conn, merkle_files)
+            incremental.write_merkle(conn, merkle_to_write)
 
         all_chunk_ids, all_chunks = _load_chunks(conn)
-        if not incremental_mode:
-            _clear_symbol_graph(conn)
 
         nodes_symbol, edges_symbol = _write_symbol_graph(
             conn,
@@ -238,7 +256,9 @@ def run(ns: argparse.Namespace) -> int:
             len(all_chunks),
             nodes_symbol,
             edges_symbol,
-            incremental.merkle_root(current_shas),
+            incremental.merkle_root(
+                {rel: sha for rel, (sha, _size) in merkle_to_write.items()}
+            ),
         )
         manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
                                     file_count, len(all_chunks), warnings,
@@ -281,10 +301,56 @@ def _embed_in_batches(emb: embedder.Embedder, texts: List[str], batch: int):
     return np.concatenate(rows, axis=0)
 
 
+def _chunk_selected_entries(
+    entries: list[walker.WalkEntry],
+    paths_to_chunk: set[str],
+    warnings: list[str],
+) -> tuple[list[chunker.Chunk], set[str]]:
+    chunks_buf: list[chunker.Chunk] = []
+    chunked_paths: set[str] = set()
+    for entry in entries:
+        rel_file_path = entry.relpath.as_posix()
+        if rel_file_path not in paths_to_chunk:
+            continue
+        try:
+            file_chunks = list(chunker.chunk_file(entry.abspath))
+        except Exception as e:  # broad: per-file failure must not kill the run
+            warnings.append(f"chunk failed for {entry.relpath}: {e}")
+            continue
+        chunked_paths.add(rel_file_path)
+        for c in file_chunks:
+            chunks_buf.append(
+                chunker.Chunk(
+                    file_path=rel_file_path,
+                    language=c.language,
+                    kind=c.kind,
+                    name=c.name,
+                    ast_path=c.ast_path,
+                    start_line=c.start_line,
+                    end_line=c.end_line,
+                    start_byte=c.start_byte,
+                    end_byte=c.end_byte,
+                    content=c.content,
+                    content_hash=c.content_hash,
+                    token_count=c.token_count,
+                )
+            )
+    return chunks_buf, chunked_paths
+
+
 def _missing_prior_merkle(conn) -> bool:
     merkle_count = conn.execute("SELECT COUNT(*) FROM merkle_files").fetchone()[0]
     chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     return merkle_count == 0 and chunk_count > 0
+
+
+def _read_merkle_files(conn) -> dict[str, tuple[str, int]]:
+    return {
+        row[0]: (row[1], int(row[2]))
+        for row in conn.execute(
+            "SELECT file_path, blob_sha, size_bytes FROM merkle_files"
+        )
+    }
 
 
 def _indexed_file_paths(conn) -> set[str]:
@@ -302,6 +368,19 @@ def _metadata_for_empty_update(conn, incremental_mode: bool) -> tuple[str, str, 
         db.read_meta(conn, "embedder_model") or fallback.model_id,
         db.read_meta(conn, "embedder_dim") or str(fallback.dim),
         db.read_meta(conn, "embedder_quant") or "int8",
+    )
+
+
+def _embedder_metadata_mismatch(
+    conn,
+    embedder_model: str,
+    embedder_dim: str,
+    embedder_quant: str,
+) -> bool:
+    return (
+        db.read_meta(conn, "embedder_model") != embedder_model
+        or db.read_meta(conn, "embedder_dim") != embedder_dim
+        or db.read_meta(conn, "embedder_quant") != embedder_quant
     )
 
 
