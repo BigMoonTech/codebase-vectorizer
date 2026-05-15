@@ -3,22 +3,31 @@
 ## Current State
 
 - Branch: `dev`
-- Current HEAD: `bc013d4 Merge branch 'slice-2-tree-sitter-cast' into dev`
-- `dev` is aligned with `origin/dev` at this HEAD.
+- Current HEAD: `2104d5b slice 3 t2: preserve chunkless file nodes`
+- `dev` is ahead of `origin/dev` by six local source commits plus the pending checklist/handoff commit:
+  - `b5886bd slice 3 t1: index identifier trigrams`
+  - `4dd8597 slice 3 t1: address identifier review`
+  - `1d6bdc4 docs: mark task 1 complete`
+  - `4196e6d slice 3 t2: populate symbol graph`
+  - `758be1e slice 3 t2: address symbol graph review`
+  - `2104d5b slice 3 t2: preserve chunkless file nodes`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
-- The active next plan is:
+- The active execution plan is:
   - `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`
 
 ## Current Uncommitted Work
 
-This handoff was written in the same session that created and revised the final completion plan. Expected working tree changes before the next commit:
+This handoff was updated during Task 2 review. At the moment of this update:
 
-- New: `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`
-- Modified: `docs/HANDOFF.md`
-
-No source-code changes were made in this planning/handoff update.
+- Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 2 review fixes landed in `758be1e` and `2104d5b`:
+  - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
+  - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
+  - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
+- The only expected uncommitted change is this handoff update itself.
 
 ## Verified Baseline
 
@@ -30,7 +39,11 @@ Latest verified code baseline after merging Slice 2:
   - query path returned AST function chunks
   - DB metadata checks confirmed expected `auth.py` and `util.js` function chunks
 
-No tests were run for this handoff-only edit.
+Latest verification in the current session:
+
+- Baseline before final plan execution: `224 passed, 1 skipped`.
+- Task 1 focused verification: `12 passed`.
+- Task 2 focused verification including vectorize regression coverage after fixes: `24 passed`.
 
 ## What Exists Today
 
@@ -65,20 +78,20 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces still to implement:
 
-1. Identifier trigrams.
-2. tags.scm-backed Tier-A symbol extraction.
-3. Symbol graph nodes/edges.
-4. Query router with fast/full lanes.
-5. Graph expansion plus query-time Personalized PageRank.
-6. Cross-encoder reranking and refined-query hints.
-7. `codebase-relate`, plus `graph` and `flow` CLI aliases.
-8. Content-hash embedding cache.
-9. Merkle incremental indexing.
-10. Intra-procedural CFG/DFG flow edges and flow relate verbs.
-11. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
-12. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
-13. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
-14. README and skill docs aligned to final behavior.
+1. tags.scm-backed Tier-A symbol extraction.
+2. Query router with fast/full lanes.
+3. Graph expansion plus query-time Personalized PageRank.
+4. Cross-encoder reranking and refined-query hints.
+5. `codebase-relate`, plus `graph` and `flow` CLI aliases.
+6. Content-hash embedding cache.
+7. Merkle incremental indexing.
+8. Intra-procedural CFG/DFG flow edges and flow relate verbs.
+9. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
+10. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
+11. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
+12. README and skill docs aligned to final behavior.
+
+Task 2 note: symbol graph nodes/edges now exist as the planned bootstrap implementation, but do not call symbol extraction spec-complete until Task 2A lands.
 
 ## Completion Tracking Rule
 
@@ -104,9 +117,9 @@ User requested:
 
 Recommended next action:
 
-1. Commit the plan/handoff update on `dev`.
-2. Execute `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md` task by task.
-3. Use `superpowers:subagent-driven-development` if delegating tasks, with fresh subagents and review after each task.
+1. Commit the Task 2 checklist/handoff update.
+2. Continue with Task 2A, then Task 3, using `superpowers:subagent-driven-development` with fresh subagents and review after each task.
+3. Task 2A is required before symbol extraction can be called spec-complete; Task 2 is only the reviewed bootstrap.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.

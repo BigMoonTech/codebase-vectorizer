@@ -248,7 +248,7 @@ This task may start with focused extraction code, but it is not spec-complete un
 - Modify: `scripts/cbv/commands/vectorize.py`
 - Modify: `tests/integration/test_full_index.py`
 
-- [ ] **Step 1: Write failing symbol extraction tests**
+- [x] **Step 1: Write failing symbol extraction tests**
 
 Create `tests/unit/test_symbols.py`:
 
@@ -279,7 +279,7 @@ def test_javascript_symbols_extract_function_and_call():
     assert any(e.kind == "calls" and e.dst_name == "snakeCase" for e in extracted.edges)
 ```
 
-- [ ] **Step 2: Implement symbol dataclasses and extraction**
+- [x] **Step 2: Implement symbol dataclasses and extraction**
 
 Create `scripts/cbv/symbols.py`:
 
@@ -386,7 +386,7 @@ def extract_symbols(file_path: Path, language: str, source: bytes, tree) -> Extr
     return ExtractedSymbols(nodes, edges)
 ```
 
-- [ ] **Step 3: Implement graph persistence**
+- [x] **Step 3: Implement graph persistence**
 
 Create `scripts/cbv/graph.py`:
 
@@ -428,13 +428,13 @@ def insert_edges(conn, edges: list[SymbolEdge], ids: dict[str, int]) -> int:
     return written
 ```
 
-- [ ] **Step 4: Wire vectorize**
+- [x] **Step 4: Wire vectorize**
 
 In `vectorize.py`, keep a mapping from stored chunks to parsed source files. After chunks and embeddings are inserted, parse supported files again and write nodes/edges. Link a symbol node to the first chunk in the same file whose byte range contains the node start byte.
 
 Implementation rule: if symbol extraction raises for one file, append `symbol extraction failed for <file>: <error>` to `warnings` and keep indexing.
 
-- [ ] **Step 5: Verify metadata counts**
+- [x] **Step 5: Verify metadata counts**
 
 Update `_write_meta` call to receive actual counts and write:
 
@@ -450,7 +450,7 @@ Update summary:
 "edges_symbol": edges_symbol,
 ```
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run:
 
