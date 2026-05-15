@@ -157,6 +157,20 @@ def _extract_js_property_name(node, source: bytes) -> Optional[str]:
     return _extract_js_static_string_property_name(node, source)
 
 
+def _extract_js_method_name(node, source: bytes) -> Optional[str]:
+    if node.type not in (
+        "method_definition",
+        "method_signature",
+        "abstract_method_signature",
+    ):
+        return None
+    return _extract_js_property_name(
+        node.child_by_field_name("name")
+        or node.child_by_field_name("property"),
+        source,
+    )
+
+
 def _extract_c_cpp_identifier_text(node, source: bytes) -> Optional[str]:
     if node is None or node.type not in _C_CPP_NAME_NODE_TYPES:
         return None
@@ -303,6 +317,11 @@ def _extract_name_with_parents(
     parents,
     source: bytes,
 ) -> Optional[str]:
+    if language in _JAVASCRIPT_FAMILY_LANGUAGES:
+        method_name = _extract_js_method_name(node, source)
+        if method_name is not None:
+            return method_name
+
     if (
         language in _JAVASCRIPT_FAMILY_LANGUAGES
         and node.type
@@ -949,6 +968,13 @@ def _should_merge_slots(
         return False
     if left_kind and right_kind:
         return False
+    if (
+        not left_kind
+        and not right_kind
+        and _labelled_parent_context(left.parents, language_name)
+        != _labelled_parent_context(right.parents, language_name)
+    ):
+        return False
     return True
 
 
@@ -959,6 +985,18 @@ def _slot_semantic_kind(slot: _Slot, language_name: str) -> Optional[str]:
     if kind in LABELLED_KINDS:
         return kind
     return None
+
+
+def _labelled_parent_context(parents, language_name: str):
+    if language_name not in _JAVASCRIPT_FAMILY_LANGUAGES:
+        return ()
+
+    context = []
+    for index, parent in enumerate(parents):
+        kind = _kind_for_node(language_name, parent, parents[:index])
+        if kind in LABELLED_KINDS:
+            context.append((kind, parent.type, parent.start_byte, parent.end_byte))
+    return tuple(context)
 
 
 def _merged_representative(left: _Slot, right: _Slot, language_name: str):

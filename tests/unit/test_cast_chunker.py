@@ -957,6 +957,65 @@ def test_multiple_assigned_functions_emit_distinct_chunks(source):
     assert ("logout", "module/function[logout]") in function_paths
 
 
+@pytest.mark.parametrize(
+    ("language_name", "source", "budget_bytes", "expected_kind", "expected_path"),
+    [
+        (
+            "javascript",
+            b"class C { ['login']() { return 1; } }\n",
+            25,
+            "method",
+            "module/class[C]/method[login]",
+        ),
+        (
+            "javascript",
+            b"const handlers = { 'login'() { return 1; } };\n",
+            1500,
+            "function",
+            "module/function[login]",
+        ),
+        (
+            "typescript",
+            b"class C { ['login'](): number { return 1; } }\n",
+            35,
+            "method",
+            "module/class[C]/method[login]",
+        ),
+        (
+            "typescript",
+            b"const handlers = { 'login'(): number { return 1; } };\n",
+            1500,
+            "function",
+            "module/function[login]",
+        ),
+    ],
+)
+def test_computed_method_chunks_use_property_name(
+    language_name,
+    source,
+    budget_bytes,
+    expected_kind,
+    expected_path,
+):
+    chunks = cast_chunker.cast_chunks(
+        _parse_language(language_name, source),
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=budget_bytes,
+    )
+
+    matching_chunks = [
+        chunk
+        for chunk in chunks
+        if chunk.kind == expected_kind and chunk.name == "login"
+    ]
+    assert matching_chunks, chunks
+    assert any(chunk.ast_path == expected_path for chunk in matching_chunks)
+    assert not any("['login']" in chunk.ast_path for chunk in chunks)
+    assert not any("'login'" == chunk.name for chunk in chunks)
+
+
 def test_overbudget_js_function_declaration_does_not_emit_keyword_function_chunk():
     source = (
         b"function big() {\n"
@@ -981,6 +1040,57 @@ def test_overbudget_js_function_declaration_does_not_emit_keyword_function_chunk
         or chunk.ast_path == "module/function[big]"
         for chunk in header_chunks
     )
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "header_text"),
+    [
+        (
+            "javascript",
+            b"class C { login() {\n"
+            + (b"  const value = 1;\n" * 8)
+            + b"  return 1;\n} }\n",
+            "login()",
+        ),
+        (
+            "typescript",
+            b"class C { login(): number {\n"
+            + (b"  const value = 1;\n" * 8)
+            + b"  return 1;\n} }\n",
+            "login(): number",
+        ),
+    ],
+)
+def test_overbudget_method_chunks_keep_method_context(
+    language_name,
+    source,
+    header_text,
+):
+    chunks = cast_chunker.cast_chunks(
+        _parse_language(language_name, source),
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=45,
+    )
+
+    _assert_concat_and_contiguous(chunks, source)
+    method_path = "module/class[C]/method[login]"
+    assert any(chunk.ast_path.startswith(method_path) for chunk in chunks), chunks
+    method_content_chunks = [
+        chunk
+        for chunk in chunks
+        if (
+            header_text in chunk.content
+            or "const value = 1;" in chunk.content
+            or "return 1;" in chunk.content
+        )
+    ]
+    assert method_content_chunks, chunks
+    assert all(
+        chunk.ast_path.startswith(method_path)
+        for chunk in method_content_chunks
+    ), method_content_chunks
 
 
 def test_overbudget_js_class_declaration_does_not_emit_keyword_class_chunk():
