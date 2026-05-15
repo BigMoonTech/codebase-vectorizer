@@ -264,7 +264,8 @@ def test_vectorize_indexes_flow_heavy_fixture_blocks_edges_and_meta(indexed_flow
         ).fetchone()[0]
         block_rows = conn.execute(
             "SELECT id, name, short_name, parent_id, start_line, signature "
-            "FROM nodes WHERE kind = 'block' ORDER BY start_line, id"
+            "FROM nodes WHERE kind = 'block' AND file_path = 'flow_app.py' "
+            "ORDER BY start_line, id"
         ).fetchall()
         edge_rows = conn.execute(
             "SELECT edge.kind, edge.weight, edge.metadata, src.name, dst.name "
@@ -301,6 +302,31 @@ def test_vectorize_indexes_flow_heavy_fixture_blocks_edges_and_meta(indexed_flow
     assert meta_edges_flow == str(edges_flow)
 
 
+def test_vectorize_indexes_tier_a_flow_fixture_blocks(indexed_flow):
+    repo = indexed_flow["repo"]
+    conn = db.open_db(paths.repo_dir(repo) / "index.sqlite")
+    try:
+        rows = conn.execute(
+            "SELECT file_path, COUNT(*) FROM nodes "
+            "WHERE kind = 'block' "
+            "AND file_path IN ('flow_app.py', 'js_flow.js', 'ts_flow.ts', 'go_flow.go') "
+            "GROUP BY file_path"
+        ).fetchall()
+        edge_rows = conn.execute(
+            "SELECT src.file_path, edge.kind FROM edges edge "
+            "JOIN nodes src ON src.id = edge.src "
+            "WHERE edge.kind IN ('controls', 'guards', 'dataflow') "
+            "AND src.file_path IN ('flow_app.py', 'js_flow.js', 'ts_flow.ts', 'go_flow.go')"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    block_counts = {row[0]: row[1] for row in rows}
+    assert {"flow_app.py", "js_flow.js", "ts_flow.ts", "go_flow.go"} <= set(block_counts)
+    controls_by_file = {row[0] for row in edge_rows if row[1] == "controls"}
+    assert {"flow_app.py", "js_flow.js", "ts_flow.ts", "go_flow.go"} <= controls_by_file
+
+
 @pytest.mark.parametrize(
     ("verb", "query", "expected_kinds"),
     [
@@ -329,6 +355,11 @@ def test_flow_relate_verbs_return_indexed_flow_json(
     assert first["function"]["name"] == "flow_app.py::decide"
     assert first["src"]["file_path"] == "flow_app.py"
     assert first["dst"]["file_path"] == "flow_app.py"
+    assert first["file_relative"] == "flow_app.py"
+    assert isinstance(first["path"], list)
+    assert isinstance(first["guards"], list)
+    assert isinstance(first["variables"], list)
+    assert first["score"] == 1.0
 
     if "dataflow" in expected_kinds:
         assert any(

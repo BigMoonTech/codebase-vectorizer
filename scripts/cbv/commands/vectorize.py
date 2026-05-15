@@ -615,11 +615,10 @@ def _write_flow_graph(
     }
 
     for rel_file_path, language in sorted(source_files):
-        if language != "python":
-            continue
         try:
             source_text = (src_dir / Path(rel_file_path)).read_text(encoding="utf-8")
-            flow_nodes, flow_edges = flow.extract_python_flow(
+            flow_nodes, flow_edges = flow.extract_flow(
+                language,
                 rel_file_path,
                 source_text,
             )

@@ -315,7 +315,7 @@ def _flow_query(conn, verb: str, query: str, *, top_k: int, warnings: list[str])
         return _conditions_for_metadata(conn, query, top_k=top_k)
     if not node_ids:
         return []
-    return _flow_edges(conn, node_ids, incoming=None, kinds=FLOW_EDGE_KINDS, top_k=top_k)
+    return _flow_edges(conn, node_ids, incoming=None, kinds=FLOW_EDGE_KINDS, top_k=top_k * 4)
 
 
 def _flow_node_ids(conn, node: dict[str, Any]) -> list[int]:
@@ -409,7 +409,7 @@ def _conditions_for_metadata(conn, query: str, *, top_k: int) -> list[dict[str, 
         kinds=("guards",),
         top_k=top_k,
     )
-    merged = guard_results + dataflow_results
+    merged = dataflow_results + guard_results
     return merged[:top_k]
 
 
@@ -453,15 +453,21 @@ def _flow_edge_result(
     else:
         primary = src
     result = dict(primary)
+    metadata = _parse_metadata(row[4])
+    function = _edge_function(conn, src, dst)
     result.update(
         {
             "edge_kind": row[2],
             "weight": float(row[3] or 0.0),
-            "metadata": _parse_metadata(row[4]),
+            "metadata": metadata,
             "src": src,
             "dst": dst,
-            "function": _edge_function(conn, src, dst),
-            "path": [src["name"], dst["name"]],
+            "function": function,
+            "file_relative": src.get("file_path") or dst.get("file_path"),
+            "path": [src["short_name"], dst["short_name"]],
+            "guards": _metadata_guards(metadata),
+            "variables": _metadata_variables(metadata),
+            "score": 1.0,
         }
     )
     return result
@@ -498,6 +504,50 @@ def _parse_metadata(raw: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"raw": raw}
     return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _metadata_guards(metadata: dict[str, Any]) -> list[str]:
+    guards: list[str] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            predicate = value.get("predicate")
+            if isinstance(predicate, str) and predicate and predicate not in guards:
+                guards.append(predicate)
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(metadata)
+    return guards
+
+
+def _metadata_variables(metadata: dict[str, Any]) -> list[str]:
+    variables: list[str] = []
+
+    def add(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                add(item)
+            return
+        if isinstance(value, str) and value not in variables:
+            variables.append(value)
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key in ("variable", "var", "variables", "vars"):
+                if key in value:
+                    add(value[key])
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(metadata)
+    return variables
 
 
 def _metadata_matches_query(raw: str | None, query: str) -> bool:
