@@ -138,6 +138,7 @@ def run(ns: argparse.Namespace) -> int:
         chunk_ids,
         warnings,
     )
+    graph.compute_pagerank(conn, warnings=warnings)
 
     # Step 7: meta + manifest.
     _write_meta(

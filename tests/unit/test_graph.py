@@ -451,3 +451,63 @@ def test_compute_pagerank_excludes_block_nodes_and_flow_edges():
     rows = dict(conn.execute("SELECT name, pagerank FROM nodes").fetchall())
     assert rows["pkg/a.py::target"] > rows["pkg/a.py::source"]
     assert rows["pkg/a.py::source::block_1"] == 0.0
+
+
+def test_compute_pagerank_warns_and_uses_uniform_scores_when_networkx_does_not_converge(
+    monkeypatch,
+):
+    import networkx as nx
+
+    conn = _conn()
+    ids = graph.insert_nodes(
+        conn,
+        [
+            SymbolNode(
+                kind="file",
+                name="pkg/a.py",
+                short_name="a.py",
+                file_path="pkg/a.py",
+                start_line=1,
+                end_line=1,
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/a.py::source",
+                short_name="source",
+                file_path="pkg/a.py",
+                start_line=2,
+                end_line=4,
+                parent_name="pkg/a.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/a.py::target",
+                short_name="target",
+                file_path="pkg/a.py",
+                start_line=6,
+                end_line=8,
+                parent_name="pkg/a.py",
+            ),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, 'calls', 1.0)",
+        (ids["pkg/a.py::source"], ids["pkg/a.py::target"]),
+    )
+
+    def fail_to_converge(*args, **kwargs):
+        raise nx.PowerIterationFailedConvergence(100)
+
+    monkeypatch.setattr(nx, "pagerank", fail_to_converge)
+    warnings = []
+
+    count = graph.compute_pagerank(conn, warnings=warnings)
+
+    assert count == 3
+    assert warnings == ["pagerank failed to converge; using uniform scores"]
+    rows = dict(conn.execute("SELECT name, pagerank FROM nodes").fetchall())
+    assert rows == {
+        "pkg/a.py": 1 / 3,
+        "pkg/a.py::source": 1 / 3,
+        "pkg/a.py::target": 1 / 3,
+    }

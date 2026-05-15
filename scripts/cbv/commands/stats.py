@@ -15,7 +15,13 @@ def run(ns: argparse.Namespace) -> int:
 
     conn = db.open_db(repo_dir / "index.sqlite")
     try:
-        db.assert_schema_v1(conn)
+        try:
+            db.assert_schema_v1(conn)
+        except db.LegacySchemaError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+
+        top_k = getattr(ns, "top_k", 10)
         counts = {
             "chunks": _count(conn, "chunks"),
             "nodes": _count(conn, "nodes"),
@@ -28,11 +34,25 @@ def run(ns: argparse.Namespace) -> int:
                 "SELECT name, kind, pagerank FROM nodes "
                 "WHERE kind != 'block' "
                 "ORDER BY pagerank DESC, name ASC LIMIT ?",
-                (ns.top_k,),
+                (top_k,),
+            )
+        ]
+        clusters = [
+            {"label": label, "summary": summary, "size": int(size)}
+            for label, summary, size in conn.execute(
+                "SELECT label, summary, size FROM clusters "
+                "ORDER BY label ASC, id ASC"
             )
         ]
         print(
-            json.dumps({"repo": ns.repo, "counts": counts, "top_nodes": top_nodes}),
+            json.dumps(
+                {
+                    "repo": ns.repo,
+                    "counts": counts,
+                    "top_nodes": top_nodes,
+                    "clusters": clusters,
+                }
+            ),
             flush=True,
         )
         return 0

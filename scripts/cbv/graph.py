@@ -95,7 +95,7 @@ def insert_edges(conn, edges: list[SymbolEdge], ids: dict[str, int]) -> int:
     return written
 
 
-def compute_pagerank(conn) -> int:
+def compute_pagerank(conn, warnings: list[str] | None = None) -> int:
     import networkx as nx
 
     node_ids = {
@@ -126,6 +126,8 @@ def compute_pagerank(conn) -> int:
             raise
         scores = _weighted_pagerank(g)
     except nx.PowerIterationFailedConvergence:
+        if warnings is not None:
+            warnings.append("pagerank failed to converge; using uniform scores")
         uniform = 1.0 / len(node_ids)
         scores = {node_id: uniform for node_id in node_ids}
 

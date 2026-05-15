@@ -83,6 +83,41 @@ def test_vectorize_populates_fts(tmp_home, source_repo):
     assert rows >= 1
 
 
+def test_vectorize_computes_nonzero_pagerank_for_symbol_nodes(tmp_home, source_repo):
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+    vec_cmd.run(ns)
+
+    from cbv import db
+    conn = db.open_db(paths.repo_dir("upstream") / "index.sqlite")
+    try:
+        nonzero = conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE kind != 'block' AND pagerank > 0.0"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert nonzero > 0
+
+
+def test_vectorize_propagates_pagerank_warnings(tmp_home, source_repo, monkeypatch, capsys):
+    def fake_compute_pagerank(conn, warnings=None):
+        if warnings is not None:
+            warnings.append("pagerank failed to converge; using uniform scores")
+        return 0
+
+    monkeypatch.setattr(vec_cmd.graph, "compute_pagerank", fake_compute_pagerank)
+
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+    vec_cmd.run(ns)
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+    manifest = json.loads((paths.repo_dir("upstream") / "manifest.json").read_text())
+
+    assert "pagerank failed to converge; using uniform scores" in blob["warnings"]
+    assert "pagerank failed to converge; using uniform scores" in manifest["warnings"]
+
+
 def test_vectorize_populates_symbol_trigrams(tmp_home, source_repo):
     ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
     vec_cmd.run(ns)
