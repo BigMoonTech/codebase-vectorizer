@@ -78,6 +78,69 @@ def _extract_name(node, source: bytes) -> Optional[str]:
         return None
 
 
+_JAVASCRIPT_FAMILY_LANGUAGES = frozenset(("javascript", "typescript", "tsx"))
+_JAVASCRIPT_NAME_NODE_TYPES = frozenset(
+    ("identifier", "private_property_identifier", "property_identifier")
+)
+
+
+def _same_node(left, right) -> bool:
+    if left is None or right is None:
+        return False
+    return (
+        left.type == right.type
+        and left.start_byte == right.start_byte
+        and left.end_byte == right.end_byte
+    )
+
+
+def _extract_identifier_text(node, source: bytes) -> Optional[str]:
+    if node is None or node.type not in _JAVASCRIPT_NAME_NODE_TYPES:
+        return None
+    try:
+        return source[node.start_byte:node.end_byte].decode(
+            "utf-8",
+            errors="replace",
+        )
+    except Exception:
+        return None
+
+
+def _extract_js_assigned_function_name(node, parents, source: bytes) -> Optional[str]:
+    for parent in reversed(parents):
+        if parent.type == "variable_declarator":
+            value = parent.child_by_field_name("value")
+            if _same_node(value, node):
+                return _extract_identifier_text(
+                    parent.child_by_field_name("name"),
+                    source,
+                )
+
+        if parent.type == "assignment_expression":
+            right = parent.child_by_field_name("right")
+            if _same_node(right, node):
+                return _extract_identifier_text(
+                    parent.child_by_field_name("left"),
+                    source,
+                )
+
+    return None
+
+
+def _extract_name_with_parents(
+    language: str,
+    node,
+    parents,
+    source: bytes,
+) -> Optional[str]:
+    direct_name = _extract_name(node, source)
+    if direct_name is not None:
+        return direct_name
+    if language in _JAVASCRIPT_FAMILY_LANGUAGES:
+        return _extract_js_assigned_function_name(node, parents, source)
+    return None
+
+
 # --- per-language kind mapping ---------------------------------------------
 
 
@@ -275,7 +338,10 @@ def _ast_path(language: str, node, parents, source: bytes) -> str:
     for i, parent in enumerate(parents[1:], start=1):
         kind = _kind_for_node(language, parent, parents[:i])
         if kind in labelled:
-            name = _extract_name(parent, source) or "?"
+            name = (
+                _extract_name_with_parents(language, parent, parents[:i], source)
+                or "?"
+            )
             segment = f"{kind}[{name}]"
             if (
                 _inner_decorated_definition(previous_labelled_parent) == parent
@@ -288,7 +354,7 @@ def _ast_path(language: str, node, parents, source: bytes) -> str:
 
     terminal_kind = _kind_for_node(language, node, parents)
     if terminal_kind in labelled:
-        name = _extract_name(node, source) or "?"
+        name = _extract_name_with_parents(language, node, parents, source) or "?"
         segment = f"{terminal_kind}[{name}]"
         if not (
             _inner_decorated_definition(previous_labelled_parent) == node
@@ -335,7 +401,10 @@ def _ast_path_for_parent_section(language: str, parents, source: bytes) -> str:
         kind = _kind_for_node(language, parent, parents[:i])
         if kind not in labelled:
             continue
-        name = _extract_name(parent, source) or "?"
+        name = (
+            _extract_name_with_parents(language, parent, parents[:i], source)
+            or "?"
+        )
         segment = f"{kind}[{name}]"
         if (
             _inner_decorated_definition(previous_labelled_parent) == parent
@@ -370,7 +439,7 @@ def _chunk_from_byte_range(
         ast_path = _ast_path_for_parent_section(language_name, parents, source)
     else:
         kind = _kind_for_node(language_name, node, parents)
-        name = _extract_name(node, source)
+        name = _extract_name_with_parents(language_name, node, parents, source)
         ast_path = _ast_path(language_name, node, parents, source)
 
     return Chunk(
@@ -478,7 +547,14 @@ def _cast_root(root, *, source: bytes, budget: int, language_name: str) -> List[
         else:
             out.append(_slot_for_node(child, parents, language_name))
 
-    merged = _greedy_merge_slots(out, budget, language_name)
+    tiled = _slots_with_explicit_gaps(
+        out,
+        root.start_byte,
+        root.end_byte,
+        parents,
+        budget,
+    )
+    merged = _greedy_merge_slots(tiled, budget, language_name)
     _tile_slots_to_range(merged, root.start_byte, root.end_byte)
     return merged
 
@@ -509,9 +585,68 @@ def _cast(node, *, parents, source: bytes, budget: int, language_name: str) -> L
         else:
             out.append(_slot_for_node(child, next_parents, language_name))
 
-    merged = _greedy_merge_slots(out, budget, language_name)
+    tiled = _slots_with_explicit_gaps(
+        out,
+        node.start_byte,
+        node.end_byte,
+        next_parents,
+        budget,
+    )
+    merged = _greedy_merge_slots(tiled, budget, language_name)
     _tile_slots_to_range(merged, node.start_byte, node.end_byte)
     return merged
+
+
+def _slots_with_explicit_gaps(
+    slots: List[_Slot],
+    start_byte: int,
+    end_byte: int,
+    parents,
+    budget: int,
+) -> List[_Slot]:
+    """Return slots plus explicit section slots for byte gaps between them."""
+    out: List[_Slot] = []
+    cursor = start_byte
+    previous_slot: Optional[_Slot] = None
+
+    for slot in slots:
+        if slot.start_byte > cursor:
+            gap_parents = (
+                _common_parent_stack(previous_slot.parents, slot.parents)
+                if previous_slot is not None
+                else list(parents)
+            )
+            out.extend(_split_gap_slots(cursor, slot.start_byte, gap_parents, budget))
+
+        out.append(slot)
+        cursor = max(cursor, slot.end_byte)
+        previous_slot = slot
+
+    if cursor < end_byte:
+        out.extend(_split_gap_slots(cursor, end_byte, list(parents), budget))
+
+    return out
+
+
+def _split_gap_slots(
+    start_byte: int,
+    end_byte: int,
+    parents,
+    budget: int,
+) -> List[_Slot]:
+    if end_byte <= start_byte:
+        return []
+
+    if budget <= 0:
+        return [_Slot(start_byte, end_byte, None, list(parents))]
+
+    out: List[_Slot] = []
+    cursor = start_byte
+    while cursor < end_byte:
+        next_cursor = min(end_byte, cursor + budget)
+        out.append(_Slot(cursor, next_cursor, None, list(parents)))
+        cursor = next_cursor
+    return out
 
 
 def _greedy_merge_slots(slots: List[_Slot], budget: int, language_name: str) -> List[_Slot]:
@@ -554,11 +689,26 @@ def _should_merge_slots(
     budget: int,
     language_name: str,
 ) -> bool:
+    left_kind = _slot_semantic_kind(left, language_name)
+    right_kind = _slot_semantic_kind(right, language_name)
     if right.end_byte - left.start_byte > budget:
+        if (
+            not left_kind
+            and not right_kind
+            and (
+                (
+                    left.end_byte - left.start_byte > budget
+                    and right.end_byte - right.start_byte < budget
+                )
+                or (
+                    right.end_byte - right.start_byte > budget
+                    and left.end_byte - left.start_byte < budget
+                )
+            )
+        ):
+            return True
         return False
-    if _slot_semantic_kind(left, language_name) and _slot_semantic_kind(
-        right, language_name
-    ):
+    if left_kind and right_kind:
         return False
     return True
 

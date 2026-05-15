@@ -321,6 +321,40 @@ def test_cast_chunks_concat_invariant_contiguous_byte_ranges():
             f"gap between {a.end_byte} and {b.start_byte}"
 
 
+def test_cast_chunks_hidden_trivia_gap_does_not_blow_semantic_budget():
+    src = (
+        b"def a():\n    return 1\n"
+        + (b"\n" * 5000)
+        + b"def b():\n    return 2\n"
+    )
+
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src),
+        src,
+        language_name="python",
+        file_path="x.py",
+        budget_bytes=1500,
+    )
+
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == src
+    assert chunks[0].start_byte == 0
+    assert chunks[-1].end_byte == len(src)
+    for left, right in zip(chunks, chunks[1:]):
+        assert left.end_byte == right.start_byte
+
+    assert any(
+        chunk.kind == "section" and chunk.content.strip() == ""
+        for chunk in chunks
+    ), chunks
+    assert all(
+        len(chunk.content.encode("utf-8")) <= 1500
+        for chunk in chunks
+        if chunk.kind != "section"
+    )
+    assert any(chunk.kind == "function" and chunk.name == "a" for chunk in chunks)
+    assert any(chunk.kind == "function" and chunk.name == "b" for chunk in chunks)
+
+
 def test_cast_chunks_single_function_under_budget_is_one_chunk():
     src = b"def foo():\n    return 42\n"
     chunks = cast_chunker.cast_chunks(
@@ -630,6 +664,37 @@ def test_common_javascript_typescript_function_forms_are_functions(
     node, parents = _find_first_node_with_parents(tree.root_node, node_type)
 
     assert cast_chunker._kind_for_node(language_name, node, parents) == "function"
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "expected_name"),
+    [
+        ("javascript", b"const f = () => 1;\n", "f"),
+        ("javascript", b"const f = function () { return 1; };\n", "f"),
+        ("tsx", b"const Component = () => <div />;\n", "Component"),
+    ],
+)
+def test_assigned_function_chunks_use_declarator_name(
+    language_name,
+    source,
+    expected_name,
+):
+    tree = _parse_language(language_name, source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=1500,
+    )
+
+    function_chunks = [chunk for chunk in chunks if chunk.kind == "function"]
+    assert function_chunks, chunks
+    assert any(chunk.name == expected_name for chunk in function_chunks)
+    assert any(
+        chunk.ast_path == f"module/function[{expected_name}]"
+        for chunk in function_chunks
+    )
 
 
 def test_typescript_interface_and_method_signature_are_class_and_method():
