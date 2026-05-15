@@ -735,6 +735,12 @@ def test_common_javascript_typescript_function_forms_are_functions(
         ("javascript", b"obj.f = () => 1;\n", "f"),
         ("javascript", b"exports.f = function () { return 1; };\n", "f"),
         ("javascript", b"const f = (() => 1);\n", "f"),
+        ("javascript", b"const f = (/* c */ () => 1);\n", "f"),
+        (
+            "javascript",
+            b"obj.f = (/* c */ function () { return 1; });\n",
+            "f",
+        ),
     ],
 )
 def test_assigned_function_chunks_use_declarator_name(

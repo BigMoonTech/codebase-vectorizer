@@ -112,7 +112,11 @@ def _direct_function_value_matches(value_node, function_node) -> bool:
 
     current = value_node
     while current is not None and current.type == "parenthesized_expression":
-        named_children = [child for child in current.children if child.is_named]
+        named_children = [
+            child
+            for child in current.children
+            if child.is_named and child.type != "comment"
+        ]
         if len(named_children) != 1:
             return False
         child = named_children[0]
