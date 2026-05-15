@@ -1481,7 +1481,7 @@ git commit -m "slice 6 t1: cache embeddings by content hash"
 - Modify: `scripts/cbv/commands/vectorize.py`
 - Create: `tests/integration/test_incremental.py`
 
-- [ ] **Step 1: Add CLI flags**
+- [x] **Step 1: Add CLI flags**
 
 Add to `vectorize` parser:
 
@@ -1492,7 +1492,7 @@ pv.add_argument("--no-cache", action="store_true",
                 help="disable cross-repo embedding cache for this run")
 ```
 
-- [ ] **Step 2: Implement delta planner**
+- [x] **Step 2: Implement delta planner**
 
 Create `scripts/cbv/incremental.py`:
 
@@ -1553,7 +1553,7 @@ def write_merkle(conn, files: dict[str, tuple[str, int]]) -> None:
     )
 ```
 
-- [ ] **Step 3: Update vectorize behavior**
+- [x] **Step 3: Update vectorize behavior**
 
 When `--update` and `index.sqlite` exists:
 - do not delete the DB,
@@ -1564,7 +1564,7 @@ When `--update` and `index.sqlite` exists:
 
 When not `--update`, preserve current fresh rebuild behavior but also populate `merkle_files` and `merkle_root_sha`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run:
 
