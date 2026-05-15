@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -15,6 +17,10 @@ from cbv import parser  # noqa: E402
 
 def _parse_python(src: bytes):
     return parser.parse(src, parser.LANGUAGES["python"])
+
+
+def _parse_language(language_name: str, src: bytes):
+    return parser.parse(src, parser.LANGUAGES[language_name])
 
 
 def test_byte_to_line_simple():
@@ -371,3 +377,148 @@ def test_cast_chunks_cross_method_merge_uses_class_section_path():
     assert cross_method_chunks, f"expected a cross-method merged chunk: {chunks}"
     for chunk in cross_method_chunks:
         assert chunk.ast_path == "module/class[C]/section"
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "expected_text", "expected_kind", "expected_name"),
+    [
+        (
+            "javascript",
+            b"function add(a, b) { return a + b; }\n",
+            "function add",
+            "function",
+            "add",
+        ),
+        (
+            "javascript",
+            b"class Widget { render() { return 1; } }\n",
+            "class Widget",
+            "class",
+            "Widget",
+        ),
+        (
+            "typescript",
+            b"function add(a: number): number { return a; }\n",
+            "function add",
+            "function",
+            "add",
+        ),
+        (
+            "tsx",
+            b"function Component() { return <div />; }\n",
+            "function Component",
+            "function",
+            "Component",
+        ),
+        (
+            "go",
+            b"package main\nfunc add(a int) int { return a }\n",
+            "func add",
+            "function",
+            "add",
+        ),
+        (
+            "rust",
+            b"fn add(a: i32) -> i32 { a }\n",
+            "fn add",
+            "function",
+            "add",
+        ),
+        (
+            "java",
+            b"class Widget { int value() { return 1; } }\n",
+            "class Widget",
+            "class",
+            "Widget",
+        ),
+        (
+            "c",
+            b"int add(int a) { return a; }\n",
+            "int add",
+            "function",
+            None,
+        ),
+        (
+            "cpp",
+            b"int add(int a) { return a; }\n",
+            "int add",
+            "function",
+            None,
+        ),
+        (
+            "ruby",
+            b"def add(a)\n  a\nend\n",
+            "def add",
+            "function",
+            "add",
+        ),
+        (
+            "csharp",
+            b"class Widget { int Value() { return 1; } }\n",
+            "class Widget",
+            "class",
+            "Widget",
+        ),
+    ],
+)
+def test_kind_mapping_per_language(
+    language_name,
+    source,
+    expected_text,
+    expected_kind,
+    expected_name,
+):
+    tree = _parse_language(language_name, source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=35 if language_name == "go" else 120,
+    )
+
+    matching_chunks = [chunk for chunk in chunks if expected_text in chunk.content]
+    assert matching_chunks, f"expected chunk containing {expected_text!r}: {chunks}"
+    chunk = matching_chunks[0]
+    assert chunk.kind == expected_kind
+    assert chunk.name == expected_name
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "expected_name"),
+    [
+        (
+            "javascript",
+            b"class Widget { render() { return 1; } }\n",
+            "Widget",
+        ),
+        (
+            "typescript",
+            b"class Widget { render(): number { return 1; } }\n",
+            "Widget",
+        ),
+        (
+            "java",
+            b"class Widget { int value() { return 1; } }\n",
+            "Widget",
+        ),
+        (
+            "csharp",
+            b"class Widget { int Value() { return 1; } }\n",
+            "Widget",
+        ),
+    ],
+)
+def test_method_kind_inside_class(language_name, source, expected_name):
+    tree = _parse_language(language_name, source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=1500,
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0].kind == "class"
+    assert chunks[0].name == expected_name

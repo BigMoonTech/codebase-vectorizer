@@ -2,7 +2,7 @@
 
 Task 4 lays down the helper surface used by later cAST chunk construction:
 byte-to-line conversion, definition name extraction, ast_path construction,
-and per-language kind mapping for Python nodes.
+and per-language kind mapping.
 
 Per-language kind mapping (function / class / method / section) lives in
 this module. Tree-sitter node types differ across grammars; the mapping
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import bisect
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from cbv.chunker import Chunk, _sha256_hex, _token_count
 
@@ -42,23 +42,23 @@ def _byte_to_line(line_starts: Sequence[int], byte_offset: int) -> int:
 # --- name + ast_path extraction --------------------------------------------
 
 
-def _extract_name(node, source: bytes) -> Optional[str]:
-    """Return the identifier name for a definition node, or None."""
+_PYTHON_DEFINITION_TYPES = frozenset(
+    ("function_definition", "async_function_definition", "class_definition")
+)
+
+
+def _unwrap_python_decorated_definition(node):
     if node.type == "decorated_definition":
         for child in node.children:
-            if child.type in (
-                "function_definition",
-                "async_function_definition",
-                "class_definition",
-            ):
-                node = child
-                break
+            if child.type in _PYTHON_DEFINITION_TYPES:
+                return child
+    return node
 
-    if node.type not in (
-        "function_definition",
-        "async_function_definition",
-        "class_definition",
-    ):
+
+def _extract_name(node, source: bytes) -> Optional[str]:
+    """Return the identifier name for a definition node, or None."""
+    node = _unwrap_python_decorated_definition(node)
+    if node.type not in NAMEABLE_NODE_TYPES:
         return None
 
     name_node = (
@@ -81,41 +81,72 @@ def _extract_name(node, source: bytes) -> Optional[str]:
 # --- per-language kind mapping ---------------------------------------------
 
 
-def _python_kind(node, parents) -> str:
-    """Map a Python tree-sitter node to a Chunk.kind."""
-    real_type = node.type
-    if real_type == "decorated_definition":
-        for child in node.children:
-            if child.type in (
-                "function_definition",
-                "async_function_definition",
-                "class_definition",
-            ):
-                real_type = child.type
-                break
-
-    if real_type in ("function_definition", "async_function_definition"):
-        for parent in parents:
-            if parent.type == "class_definition":
-                return "method"
-        return "function"
-
-    if real_type == "class_definition":
-        return "class"
-
-    return "section"
-
-
-KIND_MAPS: dict[str, Callable] = {
-    "python": _python_kind,
+FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
+    "python": frozenset(("function_definition", "async_function_definition")),
+    "javascript": frozenset(("function_declaration", "method_definition")),
+    "typescript": frozenset(("function_declaration", "method_definition")),
+    "tsx": frozenset(("function_declaration", "method_definition")),
+    "go": frozenset(("function_declaration", "method_declaration")),
+    "rust": frozenset(("function_item",)),
+    "java": frozenset(("method_declaration", "constructor_declaration")),
+    "c": frozenset(("function_definition",)),
+    "cpp": frozenset(("function_definition",)),
+    "ruby": frozenset(("method", "singleton_method")),
+    "csharp": frozenset(("method_declaration", "constructor_declaration")),
 }
 
 
+CLASS_NODE_TYPES: dict[str, frozenset[str]] = {
+    "python": frozenset(("class_definition",)),
+    "javascript": frozenset(("class_declaration",)),
+    "typescript": frozenset(("class_declaration",)),
+    "tsx": frozenset(("class_declaration",)),
+    "go": frozenset(),
+    "rust": frozenset(),
+    "java": frozenset(("class_declaration", "interface_declaration")),
+    "c": frozenset(),
+    "cpp": frozenset(("class_specifier", "struct_specifier")),
+    "ruby": frozenset(("class", "module")),
+    "csharp": frozenset(
+        ("class_declaration", "interface_declaration", "struct_declaration")
+    ),
+}
+
+
+NAMEABLE_NODE_TYPES = frozenset(
+    node_type
+    for language_types in (*FUNCTION_NODE_TYPES.values(), *CLASS_NODE_TYPES.values())
+    for node_type in language_types
+)
+
+
+KIND_MAPS: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
+for _language in FUNCTION_NODE_TYPES.keys() | CLASS_NODE_TYPES.keys():
+    KIND_MAPS[_language] = (
+        FUNCTION_NODE_TYPES.get(_language, frozenset()),
+        CLASS_NODE_TYPES.get(_language, frozenset()),
+    )
+
+
 def _kind_for_node(language: str, node, parents) -> str:
-    fn = KIND_MAPS.get(language)
-    if fn is None:
+    node = _unwrap_python_decorated_definition(node)
+    maps = KIND_MAPS.get(language)
+    if maps is None:
         return "section"
-    return fn(node, parents)
+
+    function_types, class_types = maps
+    if node.type in class_types:
+        return "class"
+
+    if node.type in function_types:
+        if any(
+            _unwrap_python_decorated_definition(parent).type in class_types
+            for parent in parents
+        ):
+            return "method"
+        return "function"
+
+    return "section"
 
 
 def _inner_decorated_definition(node):
@@ -124,11 +155,7 @@ def _inner_decorated_definition(node):
     if node.type != "decorated_definition":
         return None
     for child in node.children:
-        if child.type in (
-            "function_definition",
-            "async_function_definition",
-            "class_definition",
-        ):
+        if child.type in _PYTHON_DEFINITION_TYPES:
             return child
     return None
 
