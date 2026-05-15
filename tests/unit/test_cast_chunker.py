@@ -864,7 +864,28 @@ def test_assigned_function_chunks_use_declarator_name(
         ),
         (
             "javascript",
+            b"const handlers = { ['login']: () => 1 };\n",
+            1500,
+            "function",
+            "module/function[login]",
+        ),
+        (
+            "typescript",
+            b"const handlers = { ['login']: () => 1 };\n",
+            1500,
+            "function",
+            "module/function[login]",
+        ),
+        (
+            "javascript",
             b"class C { login = () => 1 }\n",
+            12,
+            "method",
+            "module/class[C]/method[login]",
+        ),
+        (
+            "javascript",
+            b"class C { ['login'] = () => 1 }\n",
             12,
             "method",
             "module/class[C]/method[login]",
@@ -934,6 +955,62 @@ def test_multiple_assigned_functions_emit_distinct_chunks(source):
     ]
     assert ("login", "module/function[login]") in function_paths
     assert ("logout", "module/function[logout]") in function_paths
+
+
+def test_overbudget_js_function_declaration_does_not_emit_keyword_function_chunk():
+    source = (
+        b"function big() {\n"
+        + (b"  const value = 1;\n" * 12)
+        + b"}\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_language("javascript", source),
+        source,
+        language_name="javascript",
+        file_path="x.js",
+        budget_bytes=45,
+    )
+
+    _assert_concat_and_contiguous(chunks, source)
+    paths = [chunk.ast_path for chunk in chunks]
+    assert not any("/function[?]" in path for path in paths), chunks
+    header_chunks = [chunk for chunk in chunks if "function" in chunk.content]
+    assert header_chunks, chunks
+    assert all(
+        chunk.ast_path == "module/function[big]/section"
+        or chunk.ast_path == "module/function[big]"
+        for chunk in header_chunks
+    )
+
+
+def test_overbudget_js_class_declaration_does_not_emit_keyword_class_chunk():
+    source = (
+        b"class C {\n"
+        + b"  field0 = 0;\n"
+        + b"  field1 = 1;\n"
+        + b"  field2 = 2;\n"
+        + b"  field3 = 3;\n"
+        + b"  field4 = 4;\n"
+        + b"}\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_language("javascript", source),
+        source,
+        language_name="javascript",
+        file_path="x.js",
+        budget_bytes=30,
+    )
+
+    _assert_concat_and_contiguous(chunks, source)
+    paths = [chunk.ast_path for chunk in chunks]
+    assert not any("/class[?]" in path for path in paths), chunks
+    header_chunks = [chunk for chunk in chunks if "class" in chunk.content]
+    assert header_chunks, chunks
+    assert all(
+        chunk.ast_path == "module/class[C]/section"
+        or chunk.ast_path == "module/class[C]"
+        for chunk in header_chunks
+    )
 
 
 def test_nested_helper_function_inside_method_keeps_function_attribution():
@@ -1038,9 +1115,9 @@ def test_rust_impl_function_emits_method_chunk_with_impl_path():
 @pytest.mark.parametrize(
     ("language_name", "source", "node_type", "expected_kind"),
     [
-        ("javascript", b"class C {}\n", "class", "class"),
-        ("typescript", b"class C {}\n", "class", "class"),
-        ("tsx", b"class C {}\n", "class", "class"),
+        ("javascript", b"class C {}\n", "class_declaration", "class"),
+        ("typescript", b"class C {}\n", "class_declaration", "class"),
+        ("tsx", b"class C {}\n", "class_declaration", "class"),
         ("rust", b"struct C;\n", "struct_item", "class"),
         ("rust", b"trait T { fn tick(&self); }\n", "trait_item", "class"),
         ("rust", b"enum E { A }\n", "enum_item", "class"),

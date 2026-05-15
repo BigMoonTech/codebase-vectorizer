@@ -117,7 +117,16 @@ def _extract_identifier_text(node, source: bytes) -> Optional[str]:
 
 
 def _extract_js_static_string_property_name(node, source: bytes) -> Optional[str]:
-    if node is None or node.type != "string":
+    if node is None:
+        return None
+
+    if node.type == "computed_property_name":
+        named_children = [child for child in node.children if child.is_named]
+        if len(named_children) != 1:
+            return None
+        return _extract_js_static_string_property_name(named_children[0], source)
+
+    if node.type != "string":
         return None
 
     fragments: List[str] = []
@@ -320,7 +329,6 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
     "python": frozenset(("function_definition", "async_function_definition")),
     "javascript": frozenset(
         (
-            "function",
             "function_declaration",
             "function_expression",
             "arrow_function",
@@ -331,7 +339,6 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
     ),
     "typescript": frozenset(
         (
-            "function",
             "function_declaration",
             "function_expression",
             "arrow_function",
@@ -345,7 +352,6 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
     ),
     "tsx": frozenset(
         (
-            "function",
             "function_declaration",
             "function_expression",
             "arrow_function",
@@ -369,9 +375,9 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
 
 CLASS_NODE_TYPES: dict[str, frozenset[str]] = {
     "python": frozenset(("class_definition",)),
-    "javascript": frozenset(("class", "class_declaration")),
-    "typescript": frozenset(("class", "class_declaration", "interface_declaration")),
-    "tsx": frozenset(("class", "class_declaration", "interface_declaration")),
+    "javascript": frozenset(("class_declaration",)),
+    "typescript": frozenset(("class_declaration", "interface_declaration")),
+    "tsx": frozenset(("class_declaration", "interface_declaration")),
     "go": frozenset(),
     "rust": frozenset(("enum_item", "impl_item", "struct_item", "trait_item")),
     "java": frozenset(
@@ -427,6 +433,9 @@ for _language in (
 
 def _kind_for_node(language: str, node, parents) -> str:
     node = _unwrap_python_decorated_definition(node)
+    if not node.is_named:
+        return "section"
+
     maps = KIND_MAPS.get(language)
     if maps is None:
         return "section"
