@@ -2153,7 +2153,7 @@ git commit -m "slice 7 t3: write architecture summary and bench results"
 - Modify: `skills/codebase-relate/SKILL.md`
 - Modify: `docs/HANDOFF.md`
 
-- [ ] **Step 1: Update README capability sections**
+- [x] **Step 1: Update README capability sections**
 
 Required wording changes:
 - Replace Slice 1/2 limits with complete v1.0 behavior.
@@ -2162,7 +2162,7 @@ Required wording changes:
 - Document cache and incremental `vectorize --update`.
 - Keep data location text unchanged unless code changed it.
 
-- [ ] **Step 2: Update skill docs**
+- [x] **Step 2: Update skill docs**
 
 `vectorize-repo` must mention:
 
@@ -2193,7 +2193,7 @@ with the zeros replaced by real counts after final implementation.
 
 `codebase-relate` must list every supported verb exactly as the CLI parser accepts it.
 
-- [ ] **Step 3: Verify docs mention every command**
+- [x] **Step 3: Verify docs mention every command**
 
 Run:
 
@@ -2203,7 +2203,7 @@ rg "vectorize|query|relate|stats|graph|flow|bench|--lane|--update|codebase-relat
 
 Expected: every final command appears in README and at least one skill or handoff doc.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md skills/vectorize-repo/SKILL.md skills/codebase-query/SKILL.md skills/codebase-relate/SKILL.md docs/HANDOFF.md

@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation/doc baseline before Task 13: `52326b1 docs: mark task 12 complete`
+- Latest confirmed implementation/doc baseline before Task 14: `f03c440 docs: fix task 13 review findings`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -79,6 +79,9 @@
   - `a68e057 fix task 12 benchmark and artifact edge cases`
   - `e059a76 fix task 12 integration warning expectation`
   - `08cf5cc fix task 12 incremental warning expectation`
+  - `52326b1 docs: mark task 12 complete`
+  - `771f59e docs: update v1.0 code-complete surfaces`
+  - `f03c440 docs: fix task 13 review findings`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -87,7 +90,7 @@
 
 ## Current Working State
 
-This handoff was updated after Task 12 approval:
+This handoff was updated after Task 13 approval:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
@@ -271,9 +274,14 @@ This handoff was updated after Task 12 approval:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Task 13 is documentation-only: update README and skill docs to match final
-  behavior, verify command coverage, and leave final plan checkbox updates to
-  the controller after review.
+- Task 13 documentation is complete:
+  - `771f59e docs: update v1.0 code-complete surfaces`
+  - `f03c440 docs: fix task 13 review findings`
+  - README and skill docs now describe final v1.0 behavior, `query --lane auto|fast|full`, `relate`, `stats`, `graph`, `flow`, `bench`, cache behavior, and `vectorize --update`.
+  - `skills/vectorize-repo/SKILL.md` documents the final summary fields including `nodes_symbol`, `nodes_block`, `edges_symbol`, `edges_flow`, `clusters_indexed`, `embedding_cache_hit_rate`, and `bench_results`.
+  - `skills/codebase-query/SKILL.md` documents `pipeline_used`, `refined_queries`, `expansion_size`, and `reranker_model`.
+  - `skills/codebase-relate/SKILL.md` lists the exact parser verbs and aliases.
+  - `docs/HANDOFF.md` was corrected so the current-state sections no longer describe old Slice 1 behavior or label final v1.0 features as interim Slice 3/Milestone 1 work.
 
 ## Verified Baseline
 
@@ -356,11 +364,16 @@ Latest verification in the current session:
 - Task 12 whitespace check: `git diff --check e31db83..HEAD` reported no issues.
 - Task 12 final spec review approved with no findings.
 - Task 12 final code-quality re-review approved with no blocking findings.
+- Task 13 required docs coverage grep passed:
+  `rg "vectorize|query|relate|stats|graph|flow|bench|--lane|--update|codebase-relate" README.md skills docs\HANDOFF.md`
+- Task 13 whitespace check: `git diff --check 52326b1..HEAD` reported no issues.
+- Task 13 final spec review approved: `SPEC APPROVED: compliant`.
+- Task 13 final code-quality review approved: `APPROVED: no blocking code-quality issues`.
 
 ## What Exists Today
 
-v1.0 is code-complete through Task 13 docs, pending controller review and the
-Task 14 final verification gate. The current implementation includes:
+v1.0 is code-complete through Task 13 docs. Task 14 final verification remains
+before calling the initial version complete. The current implementation includes:
 
 - `scripts/cbv/` package replacing the old v0.3.0 scripts.
 - v1.0 SQLite schema and populated chunks, FTS5 rows, sqlite-vec rows, metadata,
@@ -399,8 +412,8 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces at Task 13:
 
-1. README and skill docs aligned to final behavior by this documentation pass.
-2. Controller review and plan checkbox update still pending.
+1. README and skill docs are aligned to final behavior by the documentation pass.
+2. Task 13 spec and quality reviews passed, and the plan checklist is marked complete.
 3. Task 14 final verification gate remains before v1.0 code-complete.
 
 ## Completion Tracking Rule
@@ -411,9 +424,6 @@ The active completion plan now repeats this directive across the plan:
 
 Operational meaning:
 
-- Task 13 exception: the current user instruction supersedes the general rule;
-  do not edit the plan file in this pass. The controller will mark Task 13
-  after review.
 - After a task's implementation, verification command, and commit step succeed, edit `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
 - Change the relevant checklist items from `- [ ]` to `- [x]`.
 - Do not rely on terminal output, chat history, or commit messages as the only completion record.
@@ -430,12 +440,11 @@ User requested:
 
 Recommended next action:
 
-1. Finish Task 13 docs verification and review.
-2. Let the controller mark Task 13 complete in
+1. Run Task 14's final full verification gate before calling v1.0 code-complete.
+2. Mark Task 14 complete in
    `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`
-   after review.
-3. Run Task 14's final full verification gate before calling v1.0 code-complete.
-4. Run each task's verification command before committing.
+   only after the full suite, CLI smoke, and git-state checks pass.
+3. Update this handoff again with final verification results before any compaction or final handoff.
 
 ## Do Not Drift
 
