@@ -286,17 +286,35 @@ def _flow_query(conn, verb: str, query: str, *, top_k: int, warnings: list[str])
         warnings.append("flow not indexed")
         return []
     node = _find_symbol(conn, query, include_blocks=True)
-    if node is None:
-        return []
-    node_ids = _flow_node_ids(conn, node)
+    node_ids = _flow_node_ids(conn, node) if node is not None else []
+    if verb == "reaching-definitions":
+        results = _flow_edges(conn, node_ids, incoming=True, kinds=("dataflow",), top_k=top_k)
+        return results or _flow_edges_matching_metadata(
+            conn,
+            query,
+            kinds=("dataflow",),
+            top_k=top_k,
+        )
+    if verb == "reachable-uses":
+        results = _flow_edges(conn, node_ids, incoming=False, kinds=("dataflow",), top_k=top_k)
+        return results or _flow_edges_matching_metadata(
+            conn,
+            query,
+            kinds=("dataflow",),
+            top_k=top_k,
+        )
+    if verb == "conditions-for":
+        if node_ids:
+            return _flow_edges(
+                conn,
+                node_ids,
+                incoming=None,
+                kinds=("guards", "dataflow"),
+                top_k=top_k,
+            )
+        return _conditions_for_metadata(conn, query, top_k=top_k)
     if not node_ids:
         return []
-    if verb == "reaching-definitions":
-        return _flow_edges(conn, node_ids, incoming=True, kinds=("dataflow",), top_k=top_k)
-    if verb == "reachable-uses":
-        return _flow_edges(conn, node_ids, incoming=False, kinds=("dataflow",), top_k=top_k)
-    if verb == "conditions-for":
-        return _flow_edges(conn, node_ids, incoming=True, kinds=("guards", "controls"), top_k=top_k)
     return _flow_edges(conn, node_ids, incoming=None, kinds=FLOW_EDGE_KINDS, top_k=top_k)
 
 
@@ -311,28 +329,186 @@ def _flow_node_ids(conn, node: dict[str, Any]) -> list[int]:
 
 
 def _flow_edges(conn, node_ids: list[int], *, incoming: bool | None, kinds: tuple[str, ...], top_k: int) -> list[dict[str, Any]]:
+    if not node_ids:
+        return []
     node_placeholders = ",".join("?" for _ in node_ids)
     placeholders = ",".join("?" for _ in kinds)
     if incoming is True:
         where = f"edge.dst IN ({node_placeholders}) AND edge.kind IN ({placeholders})"
-        other_expr = "edge.src"
         params = (*node_ids, *kinds, top_k)
     elif incoming is False:
         where = f"edge.src IN ({node_placeholders}) AND edge.kind IN ({placeholders})"
-        other_expr = "edge.dst"
         params = (*node_ids, *kinds, top_k)
     else:
         where = f"(edge.src IN ({node_placeholders}) OR edge.dst IN ({node_placeholders})) AND edge.kind IN ({placeholders})"
-        other_expr = f"CASE WHEN edge.src IN ({node_placeholders}) THEN edge.dst ELSE edge.src END"
-        params = (*node_ids, *node_ids, *node_ids, *kinds, top_k)
+        params = (*node_ids, *node_ids, *kinds, top_k)
     rows = conn.execute(
-        f"SELECT other.id, other.kind, other.name, other.short_name, other.file_path, "
-        f"other.start_line, other.end_line, other.chunk_id, other.pagerank, edge.kind, edge.weight "
-        f"FROM edges edge JOIN nodes other ON other.id = {other_expr} "
-        f"WHERE {where} ORDER BY other.pagerank DESC, other.name ASC LIMIT ?",
+        f"SELECT edge.src, edge.dst, edge.kind, edge.weight, edge.metadata "
+        f"FROM edges edge "
+        f"JOIN nodes src ON src.id = edge.src "
+        f"JOIN nodes dst ON dst.id = edge.dst "
+        f"WHERE {where} "
+        f"ORDER BY COALESCE(src.start_line, 0), COALESCE(dst.start_line, 0), edge.kind "
+        f"LIMIT ?",
         params,
     ).fetchall()
-    return [_node_result(row[:9], edge_kind=row[9], weight=row[10]) for row in rows]
+    return [
+        _flow_edge_result(
+            conn,
+            row,
+            node_ids=set(node_ids),
+            incoming=incoming,
+        )
+        for row in rows
+    ]
+
+
+def _flow_edges_matching_metadata(
+    conn,
+    query: str,
+    *,
+    kinds: tuple[str, ...],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    if not query:
+        return []
+    placeholders = ",".join("?" for _ in kinds)
+    rows = conn.execute(
+        f"SELECT edge.src, edge.dst, edge.kind, edge.weight, edge.metadata "
+        f"FROM edges edge "
+        f"JOIN nodes src ON src.id = edge.src "
+        f"JOIN nodes dst ON dst.id = edge.dst "
+        f"WHERE edge.kind IN ({placeholders}) AND edge.metadata LIKE ? "
+        f"ORDER BY COALESCE(src.start_line, 0), COALESCE(dst.start_line, 0), edge.kind "
+        f"LIMIT ?",
+        (*kinds, f"%{query}%", top_k * 4),
+    ).fetchall()
+    results = [
+        _flow_edge_result(conn, row, node_ids=set(), incoming=None)
+        for row in rows
+        if _metadata_matches_query(row[4], query)
+    ]
+    return results[:top_k]
+
+
+def _conditions_for_metadata(conn, query: str, *, top_k: int) -> list[dict[str, Any]]:
+    dataflow_results = _flow_edges_matching_metadata(
+        conn,
+        query,
+        kinds=("dataflow",),
+        top_k=top_k,
+    )
+    function_ids = {
+        result["function"]["id"]
+        for result in dataflow_results
+        if result.get("function") is not None
+    }
+    guard_results = _flow_edges_for_functions(
+        conn,
+        function_ids,
+        kinds=("guards",),
+        top_k=top_k,
+    )
+    merged = guard_results + dataflow_results
+    return merged[:top_k]
+
+
+def _flow_edges_for_functions(
+    conn,
+    function_ids: set[int],
+    *,
+    kinds: tuple[str, ...],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    if not function_ids:
+        return []
+    placeholders = ",".join("?" for _ in function_ids)
+    node_ids = [
+        int(row[0])
+        for row in conn.execute(
+            f"SELECT id FROM nodes WHERE kind = 'block' AND parent_id IN ({placeholders})",
+            tuple(function_ids),
+        ).fetchall()
+    ]
+    return _flow_edges(conn, node_ids, incoming=None, kinds=kinds, top_k=top_k)
+
+
+def _flow_edge_result(
+    conn,
+    row,
+    *,
+    node_ids: set[int],
+    incoming: bool | None,
+) -> dict[str, Any]:
+    src_id = int(row[0])
+    dst_id = int(row[1])
+    src = _node_detail(conn, src_id)
+    dst = _node_detail(conn, dst_id)
+    if incoming is True:
+        primary = src
+    elif incoming is False:
+        primary = dst
+    elif src_id in node_ids:
+        primary = dst
+    else:
+        primary = src
+    result = dict(primary)
+    result.update(
+        {
+            "edge_kind": row[2],
+            "weight": float(row[3] or 0.0),
+            "metadata": _parse_metadata(row[4]),
+            "src": src,
+            "dst": dst,
+            "function": _edge_function(conn, src, dst),
+            "path": [src["name"], dst["name"]],
+        }
+    )
+    return result
+
+
+def _node_detail(conn, node_id: int) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT id, kind, name, short_name, file_path, start_line, end_line, "
+        "chunk_id, pagerank, parent_id, signature FROM nodes WHERE id = ?",
+        (node_id,),
+    ).fetchone()
+    result = _node_result(row[:9])
+    result["parent_id"] = row[9]
+    result["signature"] = row[10]
+    return result
+
+
+def _edge_function(conn, src: dict[str, Any], dst: dict[str, Any]) -> dict[str, Any] | None:
+    if src["kind"] in {"function", "method"}:
+        return src
+    if dst["kind"] in {"function", "method"}:
+        return dst
+    parent_id = src.get("parent_id") or dst.get("parent_id")
+    if parent_id is None:
+        return None
+    return _node_detail(conn, int(parent_id))
+
+
+def _parse_metadata(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"raw": raw}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _metadata_matches_query(raw: str | None, query: str) -> bool:
+    if not raw:
+        return False
+    metadata = _parse_metadata(raw)
+    return query in {
+        str(metadata.get("variable", "")),
+        str(metadata.get("var", "")),
+        str(metadata.get("predicate", "")),
+    } or query in raw
 
 
 def _find_symbol(conn, query: str, *, include_blocks: bool = False) -> dict[str, Any] | None:

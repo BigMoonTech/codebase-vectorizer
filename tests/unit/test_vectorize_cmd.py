@@ -223,9 +223,9 @@ def test_vectorize_prints_v1_summary_json(tmp_home, source_repo, capsys):
     assert blob["files_indexed"] >= 3
     assert blob["chunks_indexed"] >= 3
     assert blob["nodes_symbol"] > 0
-    assert blob["nodes_block"] == 0
+    assert blob["nodes_block"] > 0
     assert blob["edges_symbol"] > 0
-    assert blob["edges_flow"] == 0
+    assert blob["edges_flow"] > 0
     assert blob["clusters_indexed"] == 0
     assert "warnings" in blob and isinstance(blob["warnings"], list)
     assert "elapsed_seconds" in blob

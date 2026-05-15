@@ -75,8 +75,16 @@ def test_symbol_graph_is_populated(indexed):
     from cbv import db, paths
 
     conn = db.open_db(paths.repo_dir(indexed) / "index.sqlite")
-    nodes_symbol = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-    edges_symbol = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    nodes_symbol = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind != 'block'").fetchone()[0]
+    nodes_block = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'block'").fetchone()[0]
+    edges_symbol = conn.execute(
+        "SELECT COUNT(*) FROM edges "
+        "WHERE kind IN ('defines','calls','imports','inherits','references',"
+        "'contains','tests','documents','mentions')"
+    ).fetchone()[0]
+    edges_flow = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind IN ('controls','dataflow','guards')"
+    ).fetchone()[0]
 
     assert nodes_symbol > 0
     assert edges_symbol > 0
@@ -88,7 +96,9 @@ def test_symbol_graph_is_populated(indexed):
     ).fetchone()[0] > 0
     assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind='calls'").fetchone()[0] > 0
     assert int(db.read_meta(conn, "total_nodes_symbol")) == nodes_symbol
+    assert int(db.read_meta(conn, "total_nodes_block")) == nodes_block
     assert int(db.read_meta(conn, "total_edges_symbol")) == edges_symbol
+    assert int(db.read_meta(conn, "total_edges_flow")) == edges_flow
 
 
 def test_polyglot_fixture_indexes_query_backed_symbol_edges(indexed_polyglot):
@@ -136,9 +146,9 @@ def test_vectorize_warns_on_supported_query_failure_and_preserves_file_node(
     ]
     conn = db.open_db(output_dir / "index.sqlite")
     assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 0
-    assert conn.execute(
+    assert ("file", "broken.py", "broken.py") in conn.execute(
         "SELECT kind, name, short_name FROM nodes"
-    ).fetchall() == [("file", "broken.py", "broken.py")]
+    ).fetchall()
 
 
 def test_query_for_authenticate_finds_auth_py(indexed, capsys):

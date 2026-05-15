@@ -12,8 +12,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 import pytest
 
 from cbv import db, paths  # noqa: E402
-from cbv.commands import flow_cmd, graph_cmd, relate  # noqa: E402
+from cbv.commands import flow_cmd, graph_cmd, relate, vectorize as vec_cmd  # noqa: E402
 
+
+FLOW_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "flow-heavy"
 
 ALL_RELATE_VERBS = [
     "callers",
@@ -73,6 +75,24 @@ def indexed_graph(monkeypatch, tmp_path):
         )
     conn.close()
     return "graphrepo"
+
+
+@pytest.fixture
+def indexed_flow(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    ns = argparse.Namespace(
+        source=str(FLOW_FIXTURE),
+        output_dir=None,
+        max_file_mb=1.5,
+        no_cache=True,
+        update=False,
+    )
+    rc = vec_cmd.run(ns)
+    out = capsys.readouterr().out
+    summary = json.loads([line for line in out.splitlines() if line.strip()][-1])
+    assert rc == 0
+    return {"repo": "flow-heavy", "summary": summary}
 
 
 def _run(ns, capsys):
@@ -209,6 +229,96 @@ def test_flow_alias_clean_fallback(indexed_graph, capsys):
     assert blob["verb"] == "paths-through"
     assert blob["results"] == []
     assert "flow not indexed" in blob["warnings"]
+
+
+def test_vectorize_indexes_flow_heavy_fixture_blocks_edges_and_meta(indexed_flow):
+    repo = indexed_flow["repo"]
+    summary = indexed_flow["summary"]
+    conn = db.open_db(paths.repo_dir(repo) / "index.sqlite")
+    try:
+        function_id = conn.execute(
+            "SELECT id FROM nodes WHERE kind = 'function' AND name = 'flow_app.py::decide'"
+        ).fetchone()[0]
+        block_rows = conn.execute(
+            "SELECT id, name, short_name, parent_id, start_line, signature "
+            "FROM nodes WHERE kind = 'block' ORDER BY start_line, id"
+        ).fetchall()
+        edge_rows = conn.execute(
+            "SELECT edge.kind, edge.weight, edge.metadata, src.name, dst.name "
+            "FROM edges edge "
+            "JOIN nodes src ON src.id = edge.src "
+            "JOIN nodes dst ON dst.id = edge.dst "
+            "WHERE edge.kind IN ('controls', 'dataflow', 'guards') "
+            "ORDER BY edge.kind, src.start_line, dst.start_line"
+        ).fetchall()
+        nodes_block = conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE kind = 'block'"
+        ).fetchone()[0]
+        edges_flow = conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE kind IN ('controls', 'dataflow', 'guards')"
+        ).fetchone()[0]
+        meta_nodes_block = db.read_meta(conn, "total_nodes_block")
+        meta_edges_flow = db.read_meta(conn, "total_edges_flow")
+    finally:
+        conn.close()
+
+    assert block_rows
+    assert all(row[3] == function_id for row in block_rows)
+    assert {"block_1", "block_2", "block_3"}.issubset({row[2] for row in block_rows})
+
+    weights_by_kind = {row[0]: row[1] for row in edge_rows}
+    assert weights_by_kind["controls"] == 0.5
+    assert weights_by_kind["dataflow"] == 0.7
+    assert weights_by_kind["guards"] == 0.3
+    assert any(row[0] == "guards" and "user.is_admin" in (row[2] or "") for row in edge_rows)
+    assert any(row[0] == "dataflow" and '"variable": "approved"' in (row[2] or "") for row in edge_rows)
+    assert summary["nodes_block"] == nodes_block
+    assert summary["edges_flow"] == edges_flow
+    assert meta_nodes_block == str(nodes_block)
+    assert meta_edges_flow == str(edges_flow)
+
+
+@pytest.mark.parametrize(
+    ("verb", "query", "expected_kinds"),
+    [
+        ("paths-through", "decide", {"controls", "guards", "dataflow"}),
+        ("reaching-definitions", "approved", {"dataflow"}),
+        ("reachable-uses", "approved", {"dataflow"}),
+        ("conditions-for", "approved", {"guards", "dataflow"}),
+    ],
+)
+def test_flow_relate_verbs_return_indexed_flow_json(
+    indexed_flow,
+    capsys,
+    verb,
+    query,
+    expected_kinds,
+):
+    rc, blob, _ = _run(_ns(indexed_flow["repo"], verb, query), capsys)
+
+    assert rc == 0
+    assert blob["warnings"] == []
+    assert blob["results"]
+    returned_kinds = {result["edge_kind"] for result in blob["results"]}
+    assert returned_kinds & expected_kinds
+    first = blob["results"][0]
+    assert {"src", "dst", "function", "edge_kind", "metadata", "weight"}.issubset(first)
+    assert first["function"]["name"] == "flow_app.py::decide"
+    assert first["src"]["file_path"] == "flow_app.py"
+    assert first["dst"]["file_path"] == "flow_app.py"
+
+    if "dataflow" in expected_kinds:
+        assert any(
+            result["edge_kind"] == "dataflow"
+            and result["metadata"].get("variable") == "approved"
+            for result in blob["results"]
+        )
+    if "guards" in expected_kinds:
+        assert any(
+            result["edge_kind"] == "guards"
+            and "user.is_admin" in json.dumps(result["metadata"])
+            for result in blob["results"]
+        )
 
 
 def test_flow_queries_return_indexed_flow_edges(indexed_graph, capsys):

@@ -25,6 +25,7 @@ from cbv import (
     chunker,
     db,
     embedder,
+    flow,
     graph,
     identifiers,
     incremental,
@@ -37,6 +38,11 @@ from cbv import (
 )
 
 BATCH_SIZE = 32
+FLOW_EDGE_WEIGHTS = {
+    "controls": 0.5,
+    "dataflow": 0.7,
+    "guards": 0.3,
+}
 
 
 def run(ns: argparse.Namespace) -> int:
@@ -279,6 +285,14 @@ def run(ns: argparse.Namespace) -> int:
                 all_chunk_ids,
                 warnings,
             )
+            nodes_block, edges_flow = _write_flow_graph(
+                conn,
+                src_dir,
+                graph_source_files,
+                all_chunks,
+                all_chunk_ids,
+                warnings,
+            )
             graph.compute_pagerank(conn, warnings=warnings)
 
             # Step 7: meta + manifest.
@@ -292,7 +306,9 @@ def run(ns: argparse.Namespace) -> int:
                 embedder_quant,
                 len(all_chunks),
                 nodes_symbol,
+                nodes_block,
                 edges_symbol,
+                edges_flow,
                 incremental.merkle_root(
                     {rel: sha for rel, (sha, _size) in merkle_to_write.items()}
                 ),
@@ -315,9 +331,9 @@ def run(ns: argparse.Namespace) -> int:
         "files_indexed": file_count,
         "chunks_indexed": len(all_chunks),
         "nodes_symbol": nodes_symbol,
-        "nodes_block": 0,       # Slice 9
+        "nodes_block": nodes_block,
         "edges_symbol": edges_symbol,
-        "edges_flow": 0,        # Slices 9-10
+        "edges_flow": edges_flow,
         "clusters_indexed": 0,  # Slice 7
         "elapsed_seconds": round(elapsed, 2),
         "embedding_cache_hit_rate": embedding_cache_hit_rate,
@@ -577,6 +593,97 @@ def _write_symbol_graph(
     return int(nodes_symbol), int(edges_symbol)
 
 
+def _write_flow_graph(
+    conn,
+    src_dir: Path,
+    source_files: list[tuple[str, str]],
+    chunks_buf: list[chunker.Chunk],
+    chunk_ids: list[int],
+    warnings: list[str],
+) -> tuple[int, int]:
+    chunks_by_file: dict[str, list[tuple[int, int, int]]] = {}
+    for chunk_id, c in zip(chunk_ids, chunks_buf):
+        chunks_by_file.setdefault(c.file_path, []).append(
+            (int(c.start_line), int(c.end_line), int(chunk_id))
+        )
+
+    function_ids = {
+        row[1]: int(row[0])
+        for row in conn.execute(
+            "SELECT id, name FROM nodes WHERE kind IN ('function', 'method')"
+        ).fetchall()
+    }
+
+    for rel_file_path, language in sorted(source_files):
+        if language != "python":
+            continue
+        try:
+            source_text = (src_dir / Path(rel_file_path)).read_text(encoding="utf-8")
+            flow_nodes, flow_edges = flow.extract_python_flow(
+                rel_file_path,
+                source_text,
+            )
+        except Exception as e:
+            warnings.append(f"flow extraction failed for {rel_file_path}: {e}")
+            continue
+
+        flow_node_ids: dict[str, int] = {}
+        file_chunks = chunks_by_file.get(rel_file_path, [])
+        for node in flow_nodes:
+            parent_id = function_ids.get(node.parent_symbol)
+            cur = conn.execute(
+                "INSERT INTO nodes (kind, name, short_name, file_path, start_line, "
+                "end_line, signature, parent_id, chunk_id) "
+                "VALUES ('block', ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    node.name,
+                    node.short_name,
+                    node.file_path,
+                    node.start_line,
+                    node.end_line,
+                    node.signature,
+                    parent_id,
+                    _chunk_id_containing_line(node.start_line, file_chunks),
+                ),
+            )
+            flow_node_ids[node.name] = int(cur.lastrowid)
+
+        for edge in flow_edges:
+            src_id = flow_node_ids.get(edge.src_name) or function_ids.get(edge.src_name)
+            dst_id = flow_node_ids.get(edge.dst_name) or function_ids.get(edge.dst_name)
+            if src_id is None or dst_id is None:
+                continue
+            conn.execute(
+                "INSERT OR IGNORE INTO edges (src, dst, kind, weight, metadata) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    src_id,
+                    dst_id,
+                    edge.kind,
+                    FLOW_EDGE_WEIGHTS[edge.kind],
+                    edge.metadata,
+                ),
+            )
+
+    nodes_block = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind = 'block'"
+    ).fetchone()[0]
+    edges_flow = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind IN ('controls', 'dataflow', 'guards')"
+    ).fetchone()[0]
+    return int(nodes_block), int(edges_flow)
+
+
+def _chunk_id_containing_line(
+    start_line: int,
+    ranges: list[tuple[int, int, int]],
+) -> int | None:
+    for range_start, range_end, chunk_id in ranges:
+        if range_start <= start_line <= range_end:
+            return chunk_id
+    return None
+
+
 def _chunk_id_containing_start(
     node: symbols.SymbolNode,
     ranges: list[tuple[int, int, int]],
@@ -597,7 +704,9 @@ def _write_meta(
     embedder_quant,
     total_chunks,
     nodes_symbol,
+    nodes_block,
     edges_symbol,
+    edges_flow,
     merkle_root_sha,
 ):
     rows = [
@@ -611,9 +720,9 @@ def _write_meta(
         ("reranker_model", ""),
         ("total_chunks", str(total_chunks)),
         ("total_nodes_symbol", str(nodes_symbol)),
-        ("total_nodes_block", "0"),
+        ("total_nodes_block", str(nodes_block)),
         ("total_edges_symbol", str(edges_symbol)),
-        ("total_edges_flow", "0"),
+        ("total_edges_flow", str(edges_flow)),
         ("total_clusters", "0"),
         ("merkle_root_sha", merkle_root_sha),
     ]
