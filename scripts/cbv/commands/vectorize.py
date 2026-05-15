@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import List
 
 from cbv import (
+    cache,
     chunker,
     db,
     embedder,
@@ -94,14 +95,56 @@ def run(ns: argparse.Namespace) -> int:
 
     print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
 
-    # Step 5: embed (skip the model load if there's nothing to embed).
+    # Step 5: embed cache misses (skip the model load if there's nothing to embed).
+    embedding_cache_hit_rate = 0.0
+    quantized_embeddings = []
     if not chunks_buf:
         emb = embedder.StubEmbedder()
-        embeddings = emb.embed([])
     else:
         emb = embedder.make_embedder()
         print(f"[vectorize] embedder: {emb.model_id}", flush=True)
-        embeddings = _embed_in_batches(emb, [c.content for c in chunks_buf], BATCH_SIZE)
+        cache_conn = None
+        if not getattr(ns, "no_cache", False):
+            cache_conn = cache.open_cache(paths.embedding_cache_path())
+        try:
+            hits = 0
+            quantized_embeddings = [None] * len(chunks_buf)
+            miss_positions: list[int] = []
+            miss_texts: list[str] = []
+            for i, c in enumerate(chunks_buf):
+                cached = (
+                    cache.get(cache_conn, c.content_hash, emb.model_id)
+                    if cache_conn is not None
+                    else None
+                )
+                if cached is None:
+                    miss_positions.append(i)
+                    miss_texts.append(c.content)
+                else:
+                    hits += 1
+                    quantized_embeddings[i] = cached
+
+            miss_embeddings = _embed_in_batches(emb, miss_texts, BATCH_SIZE)
+            if cache_conn is None:
+                for pos, emb_row in zip(miss_positions, miss_embeddings):
+                    quantized_embeddings[pos] = quantize.quantize_int8(
+                        emb_row.reshape(1, -1)
+                    )[0]
+            else:
+                with cache_conn:
+                    for pos, emb_row in zip(miss_positions, miss_embeddings):
+                        q = quantize.quantize_int8(emb_row.reshape(1, -1))[0]
+                        quantized_embeddings[pos] = q
+                        cache.put(
+                            cache_conn,
+                            chunks_buf[pos].content_hash,
+                            emb.model_id,
+                            q,
+                        )
+            embedding_cache_hit_rate = hits / len(chunks_buf)
+        finally:
+            if cache_conn is not None:
+                cache_conn.close()
 
     # Step 6: write chunks + embeddings.
     # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().
@@ -125,9 +168,7 @@ def run(ns: argparse.Namespace) -> int:
                 "occurrences = occurrences + excluded.occurrences",
                 identifiers.symbol_trigram_rows(chunk_id, c.content),
             )
-        for chunk_id, emb_row in zip(chunk_ids, embeddings):
-            # quantize_int8 expects shape (N, dim); pass 1-row, take [0] for 1-D array.
-            q = quantize.quantize_int8(emb_row.reshape(1, -1))[0]  # 1-D int8 array
+        for chunk_id, q in zip(chunk_ids, quantized_embeddings):
             db.insert_embedding(conn, chunk_id, q)
 
     nodes_symbol, edges_symbol = _write_symbol_graph(
@@ -152,7 +193,8 @@ def run(ns: argparse.Namespace) -> int:
         edges_symbol,
     )
     manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
-                                file_count, len(chunks_buf), warnings)
+                                file_count, len(chunks_buf), warnings,
+                                embedding_cache_hit_rate)
     (repo_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     conn.close()
@@ -172,7 +214,7 @@ def run(ns: argparse.Namespace) -> int:
         "edges_flow": 0,        # Slices 9-10
         "clusters_indexed": 0,  # Slice 7
         "elapsed_seconds": round(elapsed, 2),
-        "embedding_cache_hit_rate": 0.0,   # Slice 11
+        "embedding_cache_hit_rate": embedding_cache_hit_rate,
         "warnings": warnings,
         "bench_results": {},               # Slice 14
     }
@@ -301,7 +343,8 @@ def _write_meta(
 
 
 def _build_manifest(repo_name, repo_origin, src_dir, repo_dir, db_path,
-                     files_indexed, chunks_indexed, warnings):
+                     files_indexed, chunks_indexed, warnings,
+                     embedding_cache_hit_rate):
     return {
         "repo_name": repo_name,
         "repo_origin": repo_origin,
@@ -310,6 +353,7 @@ def _build_manifest(repo_name, repo_origin, src_dir, repo_dir, db_path,
         "db_path": str(db_path),
         "files_indexed": files_indexed,
         "chunks_indexed": chunks_indexed,
+        "embedding_cache_hit_rate": embedding_cache_hit_rate,
         "warnings": warnings,
         "schema_version": "1.0",
     }

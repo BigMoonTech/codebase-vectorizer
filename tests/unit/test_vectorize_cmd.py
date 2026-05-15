@@ -228,3 +228,46 @@ def test_vectorize_prints_v1_summary_json(tmp_home, source_repo, capsys):
     assert blob["clusters_indexed"] == 0
     assert "warnings" in blob and isinstance(blob["warnings"], list)
     assert "elapsed_seconds" in blob
+
+
+def test_vectorize_populates_embedding_cache_on_first_run(tmp_home, source_repo, capsys):
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+
+    vec_cmd.run(ns)
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+    manifest = json.loads((paths.repo_dir("upstream") / "manifest.json").read_text())
+
+    assert paths.embedding_cache_path().exists()
+    conn = sqlite3.connect(paths.embedding_cache_path())
+    try:
+        cache_rows = conn.execute(
+            "SELECT COUNT(*) FROM embedding_cache WHERE model_id = ?",
+            ("stub://sha256",),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert cache_rows == blob["chunks_indexed"]
+    assert blob["embedding_cache_hit_rate"] == 0.0
+    assert manifest["embedding_cache_hit_rate"] == 0.0
+
+
+def test_vectorize_reuses_embedding_cache_on_second_identical_run(
+    tmp_home,
+    source_repo,
+    capsys,
+):
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+
+    vec_cmd.run(ns)
+    capsys.readouterr()
+    vec_cmd.run(ns)
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+    manifest = json.loads((paths.repo_dir("upstream") / "manifest.json").read_text())
+
+    assert blob["embedding_cache_hit_rate"] == 1.0
+    assert manifest["embedding_cache_hit_rate"] == 1.0
