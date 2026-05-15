@@ -78,7 +78,8 @@ def deps_installed(py: Path) -> bool:
     invocation when llama_cpp isn't installable (e.g. Windows without VS).
     """
     core_probe = (
-        "import sqlite_vec, transformers, numpy, pathspec, requests, huggingface_hub"
+        "import sqlite_vec, transformers, numpy, pathspec, requests, "
+        "huggingface_hub, tree_sitter, tree_sitter_language_pack"
     )
     if subprocess.run([str(py), "-c", core_probe], capture_output=True).returncode != 0:
         return False

@@ -8,3 +8,5 @@ huggingface_hub>=0.23.0
 numpy>=1.26
 pathspec>=0.12
 requests>=2.31.0
+tree-sitter>=0.21.0
+tree-sitter-language-pack>=0.3.0
