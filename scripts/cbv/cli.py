@@ -39,6 +39,46 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--top-k", type=int, default=10,
                     help="number of PageRank nodes to return (default 10)")
 
+    pr = sub.add_parser("relate", help="Run graph relationship queries")
+    pr.add_argument("repo", help="indexed repo name")
+    pr.add_argument(
+        "relate_verb",
+        choices=(
+            "callers",
+            "callees",
+            "inheritance-chain",
+            "neighbors",
+            "concept-cluster",
+            "pagerank-top",
+            "shortest-path",
+            "paths-through",
+            "reaching-definitions",
+            "reachable-uses",
+            "conditions-for",
+        ),
+        help="relationship query to run",
+    )
+    pr.add_argument("query", nargs="?", default="", help="symbol or concept query")
+    pr.add_argument("target", nargs="?", default=None, help="target symbol for shortest-path")
+    pr.add_argument("--top-k", type=int, default=10,
+                    help="number of results to return (default 10)")
+    pr.add_argument("--hops", type=int, default=2,
+                    help="maximum graph hops for walk/path queries (default 2)")
+
+    pg = sub.add_parser("graph", help="Alias for relate neighbors")
+    pg.add_argument("repo", help="indexed repo name")
+    pg.add_argument("query", help="symbol query")
+    pg.add_argument("--top-k", type=int, default=10,
+                    help="number of results to return (default 10)")
+    pg.add_argument("--hops", type=int, default=2,
+                    help="maximum graph hops (default 2)")
+
+    pf = sub.add_parser("flow", help="Alias for relate paths-through")
+    pf.add_argument("repo", help="indexed repo name")
+    pf.add_argument("query", help="symbol or block query")
+    pf.add_argument("--top-k", type=int, default=10,
+                    help="number of results to return (default 10)")
+
     sub.add_parser("list", help="List every indexed repo")
     sub.add_parser("info", help="Print plugin paths and readiness")
 
@@ -52,6 +92,12 @@ def _import_command(verb: str):
         from cbv.commands import query as mod
     elif verb == "stats":
         from cbv.commands import stats as mod
+    elif verb == "relate":
+        from cbv.commands import relate as mod
+    elif verb == "graph":
+        from cbv.commands import graph_cmd as mod
+    elif verb == "flow":
+        from cbv.commands import flow_cmd as mod
     elif verb == "list":
         from cbv.commands import list_cmd as mod
     elif verb == "info":
@@ -67,6 +113,9 @@ DISPATCH: Dict[str, Callable[[argparse.Namespace], int]] = {
     "vectorize": lambda ns: _import_command("vectorize").run(ns),
     "query":     lambda ns: _import_command("query").run(ns),
     "stats":     lambda ns: _import_command("stats").run(ns),
+    "relate":    lambda ns: _import_command("relate").run(ns),
+    "graph":     lambda ns: _import_command("graph").run(ns),
+    "flow":      lambda ns: _import_command("flow").run(ns),
     "list":      lambda ns: _import_command("list").run(ns),
     "info":      lambda ns: _import_command("info").run(ns),
 }

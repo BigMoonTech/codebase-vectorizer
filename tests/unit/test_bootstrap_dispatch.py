@@ -25,7 +25,7 @@ def test_cli_known_verbs():
     actions = {a.dest: a for a in parser._actions}
     sub = next(a for a in parser._actions if a.dest == "verb")
     choices = set(sub.choices.keys())
-    assert {"vectorize", "query", "stats", "list", "info"} <= choices
+    assert {"vectorize", "query", "stats", "list", "info", "relate", "graph", "flow"} <= choices
 
 
 def test_cli_dispatch_table_has_all_verbs():
@@ -67,10 +67,44 @@ def test_cli_parses_stats_args():
     assert ns.top_k == 5
 
 
+def test_cli_parses_relate_args():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["relate", "myrepo", "callers", "authenticate_user", "--top-k", "5"])
+    assert ns.verb == "relate"
+    assert ns.repo == "myrepo"
+    assert ns.relate_verb == "callers"
+    assert ns.query == "authenticate_user"
+    assert ns.top_k == 5
+
+
+def test_cli_parses_graph_alias_args():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["graph", "myrepo", "authenticate_user", "--hops", "2"])
+    assert ns.verb == "graph"
+    assert ns.repo == "myrepo"
+    assert ns.query == "authenticate_user"
+    assert ns.hops == 2
+
+
+def test_cli_parses_flow_alias_args():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["flow", "myrepo", "authenticate_user"])
+    assert ns.verb == "flow"
+    assert ns.repo == "myrepo"
+    assert ns.query == "authenticate_user"
+
+
 def test_bootstrap_usage_and_allowlist_include_stats(capsys):
     assert "stats" in bootstrap.ALLOWED_SUBCOMMANDS
+    assert "relate" in bootstrap.ALLOWED_SUBCOMMANDS
+    assert "graph" in bootstrap.ALLOWED_SUBCOMMANDS
+    assert "flow" in bootstrap.ALLOWED_SUBCOMMANDS
     bootstrap.usage()
-    assert "stats <name>" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "stats <name>" in err
+    assert "relate <name>" in err
+    assert "graph <name>" in err
+    assert "flow <name>" in err
 
 
 def test_bootstrap_core_dependency_probe_includes_networkx():

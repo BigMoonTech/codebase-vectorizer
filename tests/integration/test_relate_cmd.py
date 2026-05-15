@@ -1,0 +1,212 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import pytest
+
+from cbv import db, paths  # noqa: E402
+from cbv.commands import flow_cmd, graph_cmd, relate  # noqa: E402
+
+
+ALL_RELATE_VERBS = [
+    "callers",
+    "callees",
+    "inheritance-chain",
+    "neighbors",
+    "concept-cluster",
+    "pagerank-top",
+    "shortest-path",
+    "paths-through",
+    "reaching-definitions",
+    "reachable-uses",
+    "conditions-for",
+]
+
+
+@pytest.fixture
+def indexed_graph(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    repo_dir = paths.repo_dir("graphrepo")
+    conn = db.open_db(repo_dir / "index.sqlite")
+    db.init_schema(conn)
+    db.write_meta(conn, "schema_version", db.SCHEMA_VERSION)
+    with conn:
+        conn.executemany(
+            "INSERT INTO chunks "
+            "(id, file_path, language, kind, name, start_line, end_line, start_byte, end_byte, content, content_hash, token_count) "
+            "VALUES (?, ?, 'python', 'function', ?, 1, 3, 0, 10, ?, ?, 3)",
+            [
+                (1, "pkg/auth.py", "authenticate_user", "def authenticate_user(): pass", "h1"),
+                (2, "pkg/router.py", "_handle_login", "def _handle_login(): pass", "h2"),
+                (3, "pkg/db.py", "fetch_one", "def fetch_one(): pass", "h3"),
+                (4, "pkg/base.py", "BaseAuth", "class BaseAuth: pass", "h4"),
+                (5, "pkg/child.py", "TokenAuth", "class TokenAuth(BaseAuth): pass", "h5"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO nodes (id, kind, name, short_name, file_path, chunk_id, pagerank) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, "function", "pkg/auth.py::authenticate_user", "authenticate_user", "pkg/auth.py", 1, 0.80),
+                (2, "function", "pkg/router.py::_handle_login", "_handle_login", "pkg/router.py", 2, 0.50),
+                (3, "function", "pkg/db.py::fetch_one", "fetch_one", "pkg/db.py", 3, 0.30),
+                (4, "class", "pkg/base.py::BaseAuth", "BaseAuth", "pkg/base.py", 4, 0.20),
+                (5, "class", "pkg/child.py::TokenAuth", "TokenAuth", "pkg/child.py", 5, 0.10),
+                (6, "block", "pkg/auth.py::authenticate_user#if", "if", "pkg/auth.py", 1, 0.99),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, ?, ?)",
+            [
+                (2, 1, "calls", 1.0),
+                (1, 3, "calls", 1.0),
+                (5, 4, "inherits", 1.0),
+                (1, 6, "contains", 1.0),
+            ],
+        )
+    conn.close()
+    return "graphrepo"
+
+
+def _run(ns, capsys):
+    rc = relate.run(ns)
+    captured = capsys.readouterr()
+    return rc, json.loads(captured.out), captured.err
+
+
+def _ns(repo, verb, query="", **kwargs):
+    data = {"repo": repo, "relate_verb": verb, "query": query, "top_k": 10, "hops": 1}
+    data.update(kwargs)
+    return argparse.Namespace(**data)
+
+
+def test_relate_missing_repo_returns_clean_code_2(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    rc = relate.run(_ns("missing", "callers", "x"))
+
+    assert rc == 2
+    assert "No index found for repo 'missing'." in capsys.readouterr().err
+
+
+def test_relate_legacy_schema_returns_clean_code_2(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    repo_dir = paths.repo_dir("legacy")
+    conn = db.open_db(repo_dir / "index.sqlite")
+    conn.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY)")
+    conn.close()
+
+    rc = relate.run(_ns("legacy", "callers", "x"))
+
+    assert rc == 2
+    assert "Detected an older codebase-vectorizer index" in capsys.readouterr().err
+
+
+def test_callers_and_callees_use_symbol_edges_ranked_by_pagerank(indexed_graph, capsys):
+    rc, callers, _ = _run(_ns(indexed_graph, "callers", "authenticate_user"), capsys)
+    assert rc == 0
+    assert callers["results"][0]["name"] == "pkg/router.py::_handle_login"
+    assert callers["results"][0]["edge_kind"] == "calls"
+
+    rc, callees, _ = _run(_ns(indexed_graph, "callees", "authenticate_user"), capsys)
+    assert rc == 0
+    assert callees["results"][0]["name"] == "pkg/db.py::fetch_one"
+    assert callees["results"][0]["edge_kind"] == "calls"
+
+
+def test_neighbors_and_graph_alias_walk_symbol_edges(indexed_graph, capsys):
+    rc, blob, _ = _run(_ns(indexed_graph, "neighbors", "authenticate_user", hops=2), capsys)
+    assert rc == 0
+    assert [r["name"] for r in blob["results"]][:2] == [
+        "pkg/router.py::_handle_login",
+        "pkg/db.py::fetch_one",
+    ]
+
+    rc = graph_cmd.run(argparse.Namespace(repo=indexed_graph, query="authenticate_user", hops=1, top_k=10))
+    alias_blob = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert alias_blob["verb"] == "neighbors"
+
+
+def test_pagerank_top_excludes_block_nodes(indexed_graph, capsys):
+    rc, blob, _ = _run(_ns(indexed_graph, "pagerank-top", "", top_k=3), capsys)
+
+    assert rc == 0
+    assert [r["name"] for r in blob["results"]] == [
+        "pkg/auth.py::authenticate_user",
+        "pkg/router.py::_handle_login",
+        "pkg/db.py::fetch_one",
+    ]
+
+
+def test_shortest_path_between_symbols(indexed_graph, capsys):
+    rc, blob, _ = _run(
+        _ns(indexed_graph, "shortest-path", "pkg/router.py::_handle_login", target="fetch_one", hops=4),
+        capsys,
+    )
+
+    assert rc == 0
+    assert [r["name"] for r in blob["results"]] == [
+        "pkg/router.py::_handle_login",
+        "pkg/auth.py::authenticate_user",
+        "pkg/db.py::fetch_one",
+    ]
+
+
+def test_concept_cluster_clean_fallback(indexed_graph, capsys):
+    rc, blob, _ = _run(_ns(indexed_graph, "concept-cluster", "auth"), capsys)
+
+    assert rc == 0
+    assert blob["results"] == []
+    assert "clusters not indexed" in blob["warnings"]
+
+
+def test_flow_alias_clean_fallback(indexed_graph, capsys):
+    rc = flow_cmd.run(argparse.Namespace(repo=indexed_graph, query="authenticate_user", top_k=10))
+
+    assert rc == 0
+    blob = json.loads(capsys.readouterr().out)
+    assert blob["verb"] == "paths-through"
+    assert blob["results"] == []
+    assert "flow not indexed" in blob["warnings"]
+
+
+def test_flow_queries_return_indexed_flow_edges(indexed_graph, capsys):
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        conn.execute(
+            "INSERT INTO nodes (id, kind, name, short_name, file_path, chunk_id, pagerank) "
+            "VALUES (7, 'block', 'pkg/auth.py::authenticate_user#return', 'return', 'pkg/auth.py', 1, 0.0)"
+        )
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (6, 7, 'controls', 1.0)"
+        )
+    conn.close()
+
+    rc, blob, _ = _run(_ns(indexed_graph, "paths-through", "pkg/auth.py::authenticate_user#if"), capsys)
+
+    assert rc == 0
+    assert blob["warnings"] == []
+    assert blob["results"][0]["name"] == "pkg/auth.py::authenticate_user#return"
+    assert blob["results"][0]["edge_kind"] == "controls"
+
+
+@pytest.mark.parametrize("verb", ALL_RELATE_VERBS)
+def test_all_verbs_return_consistent_json_shape(indexed_graph, verb, capsys):
+    kwargs = {"target": "fetch_one"} if verb == "shortest-path" else {}
+    query = "" if verb == "pagerank-top" else "authenticate_user"
+
+    rc, blob, _ = _run(_ns(indexed_graph, verb, query, **kwargs), capsys)
+
+    assert rc == 0
+    assert set(blob) == {"repo", "verb", "query", "results", "warnings"}
+    assert blob["repo"] == indexed_graph
+    assert blob["verb"] == verb
+    assert isinstance(blob["results"], list)
+    assert isinstance(blob["warnings"], list)
