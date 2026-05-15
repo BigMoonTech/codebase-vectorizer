@@ -141,6 +141,21 @@ def test_ast_path_method():
     )
 
 
+def test_ast_path_decorated_class_method_does_not_duplicate_class_segment():
+    src = b"@deco\nclass C:\n    def foo(self):\n        pass\n"
+    tree = _parse_python(src)
+    deco = tree.root_node.children[0]
+    assert deco.type == "decorated_definition"
+    cls = next(c for c in deco.children if c.type == "class_definition")
+    body = cls.child_by_field_name("body")
+    fn = next(c for c in body.children if c.type == "function_definition")
+    parents = [tree.root_node, deco, cls, body]
+    assert (
+        cast_chunker._ast_path("python", fn, parents, src)
+        == "module/class[C]/method[foo]"
+    )
+
+
 def test_ast_path_module_only_for_root_children():
     """Top-level statements (not class/function) get the module prefix only."""
     src = b"x = 1\n"

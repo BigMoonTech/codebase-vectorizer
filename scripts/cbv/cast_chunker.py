@@ -118,21 +118,50 @@ def _kind_for_node(language: str, node, parents) -> str:
     return fn(node, parents)
 
 
+def _inner_decorated_definition(node):
+    if node is None:
+        return None
+    if node.type != "decorated_definition":
+        return None
+    for child in node.children:
+        if child.type in (
+            "function_definition",
+            "async_function_definition",
+            "class_definition",
+        ):
+            return child
+    return None
+
+
 def _ast_path(language: str, node, parents, source: bytes) -> str:
     """Build a path like 'module/class[Foo]/method[bar]'."""
     parts: list[str] = ["module"]
     labelled = {"function", "class", "method"}
+    previous_labelled_parent = None
 
     for i, parent in enumerate(parents[1:], start=1):
         kind = _kind_for_node(language, parent, parents[:i])
         if kind in labelled:
             name = _extract_name(parent, source) or "?"
-            parts.append(f"{kind}[{name}]")
+            segment = f"{kind}[{name}]"
+            if (
+                _inner_decorated_definition(previous_labelled_parent) == parent
+                and parts[-1] == segment
+            ):
+                previous_labelled_parent = parent
+                continue
+            parts.append(segment)
+            previous_labelled_parent = parent
 
     terminal_kind = _kind_for_node(language, node, parents)
     if terminal_kind in labelled:
         name = _extract_name(node, source) or "?"
-        parts.append(f"{terminal_kind}[{name}]")
+        segment = f"{terminal_kind}[{name}]"
+        if not (
+            _inner_decorated_definition(previous_labelled_parent) == node
+            and parts[-1] == segment
+        ):
+            parts.append(segment)
     else:
         parts.append("section")
 
