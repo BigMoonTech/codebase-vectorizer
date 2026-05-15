@@ -113,9 +113,9 @@ def test_vectorize_writes_meta(tmp_home, source_repo):
     assert db.read_meta(conn, "embedder_model") == "stub://sha256"
     assert db.read_meta(conn, "embedder_quant") == "int8"
     assert int(db.read_meta(conn, "total_chunks")) >= 3
-    # Future-slice keys must exist with zero/empty sentinels.
-    assert db.read_meta(conn, "total_nodes_symbol") == "0"
-    assert db.read_meta(conn, "total_edges_symbol") == "0"
+    assert int(db.read_meta(conn, "total_nodes_symbol")) > 0
+    assert int(db.read_meta(conn, "total_edges_symbol")) > 0
+    # Remaining future-slice keys must exist with zero/empty sentinels.
     assert db.read_meta(conn, "total_clusters") == "0"
     assert db.read_meta(conn, "reranker_model") == ""
 
@@ -130,10 +130,9 @@ def test_vectorize_prints_v1_summary_json(tmp_home, source_repo, capsys):
     assert blob["repo_name"] == "upstream"
     assert blob["files_indexed"] >= 3
     assert blob["chunks_indexed"] >= 3
-    # Slice 1 placeholders.
-    assert blob["nodes_symbol"] == 0
+    assert blob["nodes_symbol"] > 0
     assert blob["nodes_block"] == 0
-    assert blob["edges_symbol"] == 0
+    assert blob["edges_symbol"] > 0
     assert blob["edges_flow"] == 0
     assert blob["clusters_indexed"] == 0
     assert "warnings" in blob and isinstance(blob["warnings"], list)

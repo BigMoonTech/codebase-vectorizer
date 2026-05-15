@@ -60,6 +60,19 @@ def test_javascript_file_produces_ast_chunks(indexed):
     ]
 
 
+def test_symbol_graph_is_populated(indexed):
+    from cbv import db, paths
+
+    conn = db.open_db(paths.repo_dir(indexed) / "index.sqlite")
+    nodes_symbol = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    edges_symbol = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+    assert nodes_symbol > 0
+    assert edges_symbol > 0
+    assert int(db.read_meta(conn, "total_nodes_symbol")) == nodes_symbol
+    assert int(db.read_meta(conn, "total_edges_symbol")) == edges_symbol
+
+
 def test_query_for_authenticate_finds_auth_py(indexed, capsys):
     ns = argparse.Namespace(repo=indexed, question="authenticate user credentials", top_k=5)
     query_cmd.run(ns)

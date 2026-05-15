@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import sqlite3
+import sys
+from pathlib import Path
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from cbv import graph  # noqa: E402
+from cbv.symbols import SymbolEdge, SymbolNode  # noqa: E402
+
+
+def _conn():
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE nodes (
+            id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            short_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            start_line INTEGER,
+            end_line INTEGER,
+            signature TEXT,
+            parent_id INTEGER,
+            chunk_id INTEGER
+        );
+        CREATE TABLE edges (
+            src INTEGER NOT NULL,
+            dst INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            weight REAL DEFAULT 1.0,
+            metadata TEXT,
+            PRIMARY KEY (src, dst, kind)
+        );
+        """
+    )
+    return conn
+
+
+def test_insert_nodes_sets_parent_id_from_parent_name():
+    conn = _conn()
+    nodes = [
+        SymbolNode(
+            kind="file",
+            name="pkg/router.py",
+            short_name="router.py",
+            file_path="pkg/router.py",
+            start_line=1,
+            end_line=1,
+        ),
+        SymbolNode(
+            kind="class",
+            name="pkg/router.py::Controller",
+            short_name="Controller",
+            file_path="pkg/router.py",
+            start_line=1,
+            end_line=5,
+            parent_name="pkg/router.py",
+        ),
+        SymbolNode(
+            kind="function",
+            name="pkg/router.py::Controller::route",
+            short_name="route",
+            file_path="pkg/router.py",
+            start_line=2,
+            end_line=5,
+            parent_name="pkg/router.py::Controller",
+        ),
+    ]
+
+    ids = graph.insert_nodes(conn, nodes)
+
+    parent_id = conn.execute(
+        "SELECT parent_id FROM nodes WHERE name = ?",
+        ("pkg/router.py::Controller::route",),
+    ).fetchone()[0]
+    assert parent_id == ids["pkg/router.py::Controller"]
+
+
+def test_insert_edges_resolves_dst_by_short_name():
+    conn = _conn()
+    ids = graph.insert_nodes(
+        conn,
+        [
+            SymbolNode(
+                kind="file",
+                name="pkg/router.py",
+                short_name="router.py",
+                file_path="pkg/router.py",
+                start_line=1,
+                end_line=1,
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/router.py::route",
+                short_name="route",
+                file_path="pkg/router.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/router.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/auth.py::authenticate_user",
+                short_name="authenticate_user",
+                file_path="pkg/auth.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/auth.py",
+            ),
+        ],
+    )
+
+    written = graph.insert_edges(
+        conn,
+        [
+            SymbolEdge(
+                kind="calls",
+                src_name="pkg/router.py::route",
+                dst_name="authenticate_user",
+                weight=0.9,
+            )
+        ],
+        ids,
+    )
+
+    assert written == 1
+    assert conn.execute(
+        "SELECT src, dst, kind, weight FROM edges"
+    ).fetchall() == [
+        (
+            ids["pkg/router.py::route"],
+            ids["pkg/auth.py::authenticate_user"],
+            "calls",
+            0.9,
+        )
+    ]
+
+
+def test_insert_edges_drops_unresolved_and_self_edges():
+    conn = _conn()
+    ids = graph.insert_nodes(
+        conn,
+        [
+            SymbolNode(
+                kind="file",
+                name="pkg/router.py",
+                short_name="router.py",
+                file_path="pkg/router.py",
+                start_line=1,
+                end_line=1,
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/router.py::route",
+                short_name="route",
+                file_path="pkg/router.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/router.py",
+            ),
+        ],
+    )
+
+    written = graph.insert_edges(
+        conn,
+        [
+            SymbolEdge(kind="calls", src_name="pkg/router.py::route", dst_name="missing"),
+            SymbolEdge(kind="calls", src_name="pkg/router.py::route", dst_name="route"),
+        ],
+        ids,
+    )
+
+    assert written == 0
+    assert conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 0

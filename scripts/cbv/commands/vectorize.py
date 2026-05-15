@@ -16,10 +16,23 @@ import argparse
 import json
 import shutil
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import List
 
-from cbv import chunker, db, embedder, identifiers, paths, quantize, source, walker
+from cbv import (
+    chunker,
+    db,
+    embedder,
+    graph,
+    identifiers,
+    parser,
+    paths,
+    quantize,
+    source,
+    symbols,
+    walker,
+)
 
 BATCH_SIZE = 32
 
@@ -99,9 +112,9 @@ def run(ns: argparse.Namespace) -> int:
                  c.start_line, c.end_line, c.start_byte, c.end_byte,
                  c.content, c.content_hash, c.token_count),
             )
-        ids = [row[0] for row in conn.execute("SELECT id FROM chunks ORDER BY id").fetchall()]
-        assert len(ids) == len(chunks_buf)
-        for chunk_id, c in zip(ids, chunks_buf):
+        chunk_ids = [row[0] for row in conn.execute("SELECT id FROM chunks ORDER BY id").fetchall()]
+        assert len(chunk_ids) == len(chunks_buf)
+        for chunk_id, c in zip(chunk_ids, chunks_buf):
             conn.executemany(
                 "INSERT INTO symbol_trigrams (trigram, chunk_id, symbol, occurrences) "
                 "VALUES (?, ?, ?, ?) "
@@ -109,13 +122,30 @@ def run(ns: argparse.Namespace) -> int:
                 "occurrences = occurrences + excluded.occurrences",
                 identifiers.symbol_trigram_rows(chunk_id, c.content),
             )
-        for chunk_id, emb_row in zip(ids, embeddings):
+        for chunk_id, emb_row in zip(chunk_ids, embeddings):
             # quantize_int8 expects shape (N, dim); pass 1-row, take [0] for 1-D array.
             q = quantize.quantize_int8(emb_row.reshape(1, -1))[0]  # 1-D int8 array
             db.insert_embedding(conn, chunk_id, q)
 
+    nodes_symbol, edges_symbol = _write_symbol_graph(
+        conn,
+        src_dir,
+        chunks_buf,
+        chunk_ids,
+        warnings,
+    )
+
     # Step 7: meta + manifest.
-    _write_meta(conn, repo_name, spec, commit_sha, emb, len(chunks_buf))
+    _write_meta(
+        conn,
+        repo_name,
+        spec,
+        commit_sha,
+        emb,
+        len(chunks_buf),
+        nodes_symbol,
+        edges_symbol,
+    )
     manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
                                 file_count, len(chunks_buf), warnings)
     (repo_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -131,9 +161,9 @@ def run(ns: argparse.Namespace) -> int:
         "manifest_path": str(repo_dir / "manifest.json"),
         "files_indexed": file_count,
         "chunks_indexed": len(chunks_buf),
-        "nodes_symbol": 0,      # Slice 3
+        "nodes_symbol": nodes_symbol,
         "nodes_block": 0,       # Slice 9
-        "edges_symbol": 0,      # Slice 3
+        "edges_symbol": edges_symbol,
         "edges_flow": 0,        # Slices 9-10
         "clusters_indexed": 0,  # Slice 7
         "elapsed_seconds": round(elapsed, 2),
@@ -155,7 +185,80 @@ def _embed_in_batches(emb: embedder.Embedder, texts: List[str], batch: int):
     return np.concatenate(rows, axis=0)
 
 
-def _write_meta(conn, repo_name, repo_origin, commit_sha, emb, total_chunks):
+def _write_symbol_graph(
+    conn,
+    src_dir: Path,
+    chunks_buf: list[chunker.Chunk],
+    chunk_ids: list[int],
+    warnings: list[str],
+) -> tuple[int, int]:
+    chunks_by_file: dict[str, list[tuple[int, int, int, str]]] = {}
+    for chunk_id, c in zip(chunk_ids, chunks_buf):
+        chunks_by_file.setdefault(c.file_path, []).append(
+            (c.start_byte, c.end_byte, chunk_id, c.language)
+        )
+
+    all_nodes: list[symbols.SymbolNode] = []
+    all_edges: list[symbols.SymbolEdge] = []
+    for rel_file_path, file_chunks in sorted(chunks_by_file.items()):
+        language = file_chunks[0][3]
+        language_meta = parser.language_for_name(language)
+        if language_meta is None:
+            continue
+
+        try:
+            source_bytes = (src_dir / Path(rel_file_path)).read_bytes()
+            tree = parser.parse(source_bytes, language_meta)
+            extracted = symbols.extract_symbols(
+                Path(rel_file_path),
+                language,
+                source_bytes,
+                tree,
+            )
+        except Exception as e:
+            warnings.append(f"symbol extraction failed for {rel_file_path}: {e}")
+            continue
+
+        ranges = [(start, end, chunk_id) for start, end, chunk_id, _ in file_chunks]
+        for node in extracted.nodes:
+            all_nodes.append(
+                replace(
+                    node,
+                    chunk_id=_chunk_id_containing_start(node, ranges),
+                )
+            )
+        all_edges.extend(extracted.edges)
+
+    if all_nodes:
+        with conn:
+            node_ids = graph.insert_nodes(conn, all_nodes)
+            graph.insert_edges(conn, all_edges, node_ids)
+
+    nodes_symbol = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    edges_symbol = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    return int(nodes_symbol), int(edges_symbol)
+
+
+def _chunk_id_containing_start(
+    node: symbols.SymbolNode,
+    ranges: list[tuple[int, int, int]],
+) -> int | None:
+    for start_byte, end_byte, chunk_id in ranges:
+        if start_byte <= node.start_byte < end_byte:
+            return chunk_id
+    return None
+
+
+def _write_meta(
+    conn,
+    repo_name,
+    repo_origin,
+    commit_sha,
+    emb,
+    total_chunks,
+    nodes_symbol,
+    edges_symbol,
+):
     db.write_meta(conn, "schema_version", "1.0")
     db.write_meta(conn, "indexed_at", str(int(time.time())))
     db.write_meta(conn, "repo_origin", repo_origin)
@@ -165,9 +268,9 @@ def _write_meta(conn, repo_name, repo_origin, commit_sha, emb, total_chunks):
     db.write_meta(conn, "embedder_quant", "int8")
     db.write_meta(conn, "reranker_model", "")
     db.write_meta(conn, "total_chunks", str(total_chunks))
-    db.write_meta(conn, "total_nodes_symbol", "0")
+    db.write_meta(conn, "total_nodes_symbol", str(nodes_symbol))
     db.write_meta(conn, "total_nodes_block", "0")
-    db.write_meta(conn, "total_edges_symbol", "0")
+    db.write_meta(conn, "total_edges_symbol", str(edges_symbol))
     db.write_meta(conn, "total_edges_flow", "0")
     db.write_meta(conn, "total_clusters", "0")
     db.write_meta(conn, "merkle_root_sha", "")
