@@ -119,3 +119,21 @@ def test_extract_python_flow_prunes_nested_scope_dataflow_from_outer_function():
         and json.loads(edge.metadata or "{}").get("variable") == "leaked"
     ]
     assert outer_leaked_edges == []
+
+
+def test_extract_python_flow_prunes_comprehension_scope_dataflow_from_outer_function():
+    source = (
+        "def outer(values):\n"
+        "    items = [item for item in values]\n"
+        "    return item\n"
+    )
+
+    _, edges = flow.extract_python_flow("scope.py", source)
+
+    item_edges = [
+        edge
+        for edge in edges
+        if edge.kind == "dataflow"
+        and json.loads(edge.metadata or "{}").get("variable") == "item"
+    ]
+    assert item_edges == []

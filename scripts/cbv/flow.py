@@ -181,7 +181,16 @@ def _load_names(stmt: ast.AST) -> dict[str, int]:
     return loads
 
 
-_NESTED_SCOPE_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+_NESTED_SCOPE_TYPES = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.Lambda,
+    ast.ClassDef,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
 
 
 def _scope_visible_nodes(root: ast.AST):

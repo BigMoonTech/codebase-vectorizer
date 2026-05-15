@@ -631,6 +631,8 @@ def _write_flow_graph(
         file_chunks = chunks_by_file.get(rel_file_path, [])
         for node in flow_nodes:
             parent_id = function_ids.get(node.parent_symbol)
+            if parent_id is None:
+                continue
             cur = conn.execute(
                 "INSERT INTO nodes (kind, name, short_name, file_path, start_line, "
                 "end_line, signature, parent_id, chunk_id) "

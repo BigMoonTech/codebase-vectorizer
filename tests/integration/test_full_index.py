@@ -149,7 +149,11 @@ def test_vectorize_warns_on_supported_query_failure_and_preserves_file_node(
     non_block_rows = conn.execute(
         "SELECT kind, name, short_name FROM nodes WHERE kind != 'block'"
     ).fetchall()
+    block_rows = conn.execute(
+        "SELECT name FROM nodes WHERE kind = 'block'"
+    ).fetchall()
     assert non_block_rows == [("file", "broken.py", "broken.py")]
+    assert block_rows == []
 
 
 def test_query_for_authenticate_finds_auth_py(indexed, capsys):
