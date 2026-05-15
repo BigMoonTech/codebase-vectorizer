@@ -67,3 +67,27 @@ def language_for_path(path: Path) -> Optional[Language]:
     back to text-window chunking.
     """
     return EXTENSION_LANGUAGE.get(path.suffix.lower())
+
+
+def parse(content: bytes, language: Language):
+    """Parse `content` with the given Language. Returns a tree-sitter Tree
+    (or None on failure).
+
+    `tree_sitter_language_pack` is imported lazily so that callers
+    needing only `LANGUAGES` / `language_for_path` (or tests that don't
+    touch tree-sitter) pay zero import cost.
+
+    Tree-sitter parsers are error-tolerant; a malformed source still
+    returns a Tree (with `has_error == True`). The None path is reserved
+    for outright failure to construct a parser (e.g. an unsupported
+    language slipped through the registry).
+    """
+    try:
+        from tree_sitter_language_pack import get_parser
+    except ImportError:
+        return None
+    try:
+        parser_obj = get_parser(language.ts_language_name)
+        return parser_obj.parse(content)
+    except Exception:
+        return None

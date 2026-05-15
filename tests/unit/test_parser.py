@@ -61,3 +61,49 @@ def test_language_for_path_unknown_returns_none():
 def test_language_for_name():
     assert parser.language_for_name("python").name == "python"
     assert parser.language_for_name("bogus") is None
+
+
+def test_parse_python_returns_tree():
+    lang = parser.LANGUAGES["python"]
+    src = b"def foo(x):\n    return x + 1\n"
+    tree = parser.parse(src, lang)
+    assert tree is not None
+    root = tree.root_node
+    assert root.type == "module"
+    # First child is the function definition
+    fn = root.children[0]
+    assert fn.type == "function_definition"
+    assert fn.start_byte == 0
+    assert fn.end_byte == len(src.rstrip(b"\n"))
+    assert root.end_byte == len(src)
+
+
+def test_parse_javascript_returns_tree():
+    lang = parser.LANGUAGES["javascript"]
+    src = b"function add(a, b) { return a + b; }\n"
+    tree = parser.parse(src, lang)
+    assert tree is not None
+    root = tree.root_node
+    assert root.type == "program"
+    fn = root.children[0]
+    assert fn.type == "function_declaration"
+
+
+def test_parse_returns_a_tree_even_on_syntax_errors():
+    """tree-sitter is error-tolerant: it returns a tree with ERROR nodes
+    rather than raising. We rely on this for graceful chunking of broken
+    files."""
+    lang = parser.LANGUAGES["python"]
+    src = b"def foo(:\n    this is not valid python\n"
+    tree = parser.parse(src, lang)
+    assert tree is not None  # NOT None -- tree-sitter is permissive
+    assert tree.root_node.has_error  # tree carries an ERROR somewhere
+
+
+def test_parse_empty_input():
+    """Empty bytes are still a valid (trivial) parse."""
+    lang = parser.LANGUAGES["python"]
+    tree = parser.parse(b"", lang)
+    assert tree is not None
+    assert tree.root_node.start_byte == 0
+    assert tree.root_node.end_byte == 0
