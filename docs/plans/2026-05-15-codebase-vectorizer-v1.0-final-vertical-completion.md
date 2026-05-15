@@ -1282,7 +1282,7 @@ This milestone improves answer ordering without changing indexing.
 - Modify: `scripts/cbv/commands/query.py`
 - Modify: `tests/unit/test_query_cmd.py`
 
-- [ ] **Step 1: Implement reranker adapter**
+- [x] **Step 1: Implement reranker adapter**
 
 Create `scripts/cbv/reranker.py`:
 
@@ -1330,7 +1330,7 @@ def make_reranker() -> Reranker:
     return SentenceTransformerReranker()
 ```
 
-- [ ] **Step 2: Wire reranking and confidence**
+- [x] **Step 2: Wire reranking and confidence**
 
 In `query.py`, after candidate chunks are materialized and before final formatting:
 
@@ -1367,7 +1367,7 @@ Write `reranker_model` meta during vectorize only after the first query is not p
 "reranker_model": rr.model_id,
 ```
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run:
 
