@@ -1,24 +1,21 @@
-"""cAST chunker - AST-aware chunking via tree-sitter.
+"""cAST helper utilities for AST-aware chunking via tree-sitter.
 
-Implements the cAST algorithm (Zhang et al., arXiv 2506.15655) referenced
-in spec section "Step 4 - Chunk via cAST": a recursive split-then-merge over
-the parse tree that emits non-overlapping Chunk objects. The emitted
-chunks' byte ranges tile the source bytes contiguously so concat == file.
+Task 4 lays down the helper surface used by later cAST chunk construction:
+byte-to-line conversion, definition name extraction, ast_path construction,
+and per-language kind mapping for Python nodes.
 
 Per-language kind mapping (function / class / method / section) lives in
 this module. Tree-sitter node types differ across grammars; the mapping
 is a per-language function that takes (node, ancestor_list) and returns
 the cbv kind string. Unknown nodes fall back to "section".
 
-`cast_chunks()` is the entry point. It is called by chunker.py's
-orchestrator only after parser.parse() returned a non-None Tree.
+Chunk construction and the `cast_chunks()` entry point are added in later
+tasks; this module currently exposes only helper functions.
 """
 from __future__ import annotations
 
 import bisect
 from typing import Callable, List, Optional, Sequence
-
-from cbv.chunker import Chunk, _sha256_hex, _token_count
 
 
 # --- byte / line helpers ---------------------------------------------------
