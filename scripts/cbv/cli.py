@@ -31,6 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
     pq.add_argument("question", help="natural-language or identifier query")
     pq.add_argument("--top-k", type=int, default=10,
                     help="number of results to return (default 10)")
+    pq.add_argument("--lane", choices=("auto", "fast", "full"), default="auto",
+                    help="query lane: auto, fast, or full (default auto)")
 
     sub.add_parser("list", help="List every indexed repo")
     sub.add_parser("info", help="Print plugin paths and readiness")

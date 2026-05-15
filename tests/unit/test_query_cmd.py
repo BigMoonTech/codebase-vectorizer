@@ -43,18 +43,22 @@ def indexed_repo(monkeypatch, tmp_path):
     return "upstream"
 
 
-def test_query_returns_v1_shape(indexed_repo, capsys):
-    ns = argparse.Namespace(repo=indexed_repo, question="authenticate user", top_k=3)
+def test_query_returns_lane_shape_without_explicit_lane(indexed_repo, capsys):
+    ns = argparse.Namespace(
+        repo=indexed_repo,
+        question="how does login authenticate users",
+        top_k=3,
+    )
     rc = query_cmd.run(ns)
     assert rc == 0
     out = capsys.readouterr().out
     blob = json.loads([l for l in out.strip().splitlines() if l.strip()][-1])
     assert blob["repo"] == indexed_repo
-    assert blob["query"] == "authenticate user"
-    assert blob["pipeline_used"] == "full"   # Slice 1 only has the full lane
+    assert blob["query"] == "how does login authenticate users"
+    assert blob["pipeline_used"] == "full"
     assert "results" in blob and isinstance(blob["results"], list)
-    assert "refined_queries" in blob   # always present, empty list in Slice 1
-    assert blob["expansion_size"] == 0  # graph expansion lands in Slice 3
+    assert "refined_queries" in blob
+    assert isinstance(blob["expansion_size"], int)
 
 
 def test_query_results_have_required_fields(indexed_repo, capsys):

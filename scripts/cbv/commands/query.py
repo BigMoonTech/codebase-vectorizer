@@ -1,16 +1,17 @@
-"""`query` verb — BM25 + dense + RRF retrieval.
+"""`query` verb — BM25/dense/symbol/graph retrieval.
 
-Slice 1 implements only the spec's "full lane" minus rerank/graph/clusters:
-  Stage 1 (parallel seed in spec; sequential here):
-    - BM25 top-50 over chunks_fts
-    - dense top-50 over vec_chunks
-  Stage 2:
-    - Reciprocal Rank Fusion (k=60 constant per RRF paper) of the two lists
-  Stage 3-6: deferred to later slices.
+The auto router sends identifier-style lookups to the fast lane:
+  - symbol exact
+  - symbol trigram
+  - BM25
+
+Natural-language queries use the full lane:
+  - BM25
+  - dense vector retrieval
+  - symbol exact
+  - graph expansion from the fused seed set
 
 Slices that extend this command:
-  Slice 3 — graph expansion + symbol-exact seed
-  Slice 4 — fast lane + query router
   Slice 5 — cross-encoder rerank
   Slice 6 — Personalized PageRank
   Slice 15 — confidence + refined_queries hints
@@ -25,7 +26,7 @@ from typing import Dict, List
 
 import numpy as np
 
-from cbv import db, embedder, paths, quantize
+from cbv import db, embedder, paths, quantize, query_router
 
 RRF_K = 60  # standard RRF damping constant
 
@@ -50,17 +51,40 @@ def run(ns: argparse.Namespace) -> int:
             print(str(e), file=sys.stderr)
             return 2
 
-        # Stage 1a: BM25.
-        bm25_hits = _bm25(conn, ns.question, limit=50)
+        lane = query_router.route(ns.question, getattr(ns, "lane", "auto"))
+        expansion = {}
 
-        # Stage 1b: dense (uses vec_int8 SQL function per sqlite-vec 0.1.x).
-        emb = embedder.make_embedder()
-        qv = emb.embed([ns.question])[0]
-        q_int8 = quantize.quantize_int8(qv.reshape(1, -1))[0]
-        dense_hits = _dense(conn, q_int8, limit=50)
+        if lane == "fast":
+            fused = _rrf(
+                [
+                    _symbol_exact(conn, ns.question, limit=50),
+                    _trigram(conn, ns.question, limit=50),
+                    _bm25(conn, ns.question, limit=50),
+                ],
+                k=RRF_K,
+                source_names=["symbol", "trigram", "bm25"],
+            )
+        else:
+            bm25_hits = _bm25(conn, ns.question, limit=50)
 
-        # Stage 2: RRF fuse.
-        fused = _rrf([bm25_hits, dense_hits], k=RRF_K)
+            # Dense uses vec_int8 SQL function per sqlite-vec 0.1.x.
+            emb = embedder.make_embedder()
+            qv = emb.embed([ns.question])[0]
+            q_int8 = quantize.quantize_int8(qv.reshape(1, -1))[0]
+            dense_hits = _dense(conn, q_int8, limit=50)
+
+            sym_hits = _symbol_exact(conn, ns.question, limit=50)
+            seed = _rrf(
+                [bm25_hits, dense_hits, sym_hits],
+                k=RRF_K,
+                source_names=["bm25", "dense", "symbol"],
+            )
+            expansion = _graph_expand(conn, [cid for cid, _, _ in seed[:20]])
+            fused = _rrf(
+                [bm25_hits, dense_hits, sym_hits, expansion],
+                k=RRF_K,
+                source_names=["bm25", "dense", "symbol", "graph"],
+            )
         top = fused[: ns.top_k]
 
         # Materialize result rows.
@@ -91,10 +115,10 @@ def run(ns: argparse.Namespace) -> int:
             "repo": ns.repo,
             "query": ns.question,
             "repo_dir": str(repo_dir),
-            "pipeline_used": "full",
+            "pipeline_used": lane,
             "results": results,
             "refined_queries": [],   # Slice 15
-            "expansion_size": 0,      # Slice 3
+            "expansion_size": len(expansion) if lane == "full" else 0,
         }
         print(json.dumps(blob), flush=True)
         return 0
@@ -141,12 +165,64 @@ def _dense(conn, q_int8: np.ndarray, *, limit: int) -> Dict[int, float]:
     return {int(r[0]): -float(r[1]) for r in rows}
 
 
-def _rrf(rankings: List[Dict[int, float]], *, k: int) -> List[tuple]:
+def _symbol_exact(conn, query: str, *, limit: int) -> dict[int, float]:
+    q = query.strip().split()[-1]
+    rows = conn.execute(
+        "SELECT DISTINCT chunk_id FROM nodes "
+        "WHERE chunk_id IS NOT NULL AND kind != 'block' "
+        "AND (short_name = ? OR name = ?) LIMIT ?",
+        (q, q, limit),
+    ).fetchall()
+    return {int(row[0]): float(limit - idx) for idx, row in enumerate(rows)}
+
+
+def _trigram(conn, query: str, *, limit: int) -> dict[int, float]:
+    from cbv import identifiers
+
+    grams = sorted(identifiers.trigrams(query.strip().split()[-1]))
+    if not grams:
+        return {}
+    placeholders = ",".join("?" for _ in grams)
+    rows = conn.execute(
+        f"SELECT chunk_id, SUM(occurrences) AS score FROM symbol_trigrams "
+        f"WHERE trigram IN ({placeholders}) GROUP BY chunk_id "
+        f"ORDER BY score DESC LIMIT ?",
+        (*grams, limit),
+    ).fetchall()
+    return {int(row[0]): float(row[1]) for row in rows}
+
+
+def _graph_expand(conn, seed_chunk_ids: list[int], *, per_node: int = 3) -> dict[int, float]:
+    if not seed_chunk_ids:
+        return {}
+    placeholders = ",".join("?" for _ in seed_chunk_ids)
+    rows = conn.execute(
+        f"SELECT DISTINCT neighbor.chunk_id, edge.weight "
+        f"FROM nodes seed "
+        f"JOIN edges edge ON edge.src = seed.id OR edge.dst = seed.id "
+        f"JOIN nodes neighbor ON neighbor.id = CASE WHEN edge.src = seed.id THEN edge.dst ELSE edge.src END "
+        f"WHERE seed.chunk_id IN ({placeholders}) AND neighbor.chunk_id IS NOT NULL "
+        f"LIMIT ?",
+        (*seed_chunk_ids, max(1, len(seed_chunk_ids) * per_node)),
+    ).fetchall()
+    return {int(row[0]): float(row[1]) for row in rows}
+
+
+def _rrf(
+    rankings: List[Dict[int, float]],
+    *,
+    k: int,
+    source_names: list[str] | None = None,
+) -> List[tuple]:
     """Reciprocal Rank Fusion. Sources is a tag list per chunk for debug."""
-    SOURCE_NAMES = ["bm25", "dense"]
+    if source_names is None:
+        source_names = [f"source_{idx}" for idx in range(len(rankings))]
+    if len(source_names) != len(rankings):
+        raise ValueError("source_names length must match rankings length")
+
     aggregate: Dict[int, float] = {}
     sources: Dict[int, list] = {}
-    for tag, ranking in zip(SOURCE_NAMES, rankings):
+    for tag, ranking in zip(source_names, rankings):
         if tag == "bm25":
             sorted_ids = [cid for cid, _ in sorted(ranking.items(), key=lambda kv: kv[1])]
         else:
