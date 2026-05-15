@@ -89,16 +89,20 @@ def run(ns: argparse.Namespace) -> int:
             source_files.append((rel_file_path, chunker.detect_language(entry.abspath)))
 
         paths_to_chunk = set(current_shas)
-        missing_prior_merkle = False
+        force_full_rebuild = False
         prior_merkle_files: dict[str, tuple[str, int]] = {}
         delta = None
         if incremental_mode:
-            missing_prior_merkle = _missing_prior_merkle(conn)
             prior_merkle_files = _read_merkle_files(conn)
+            force_full_rebuild = _missing_merkle_for_indexed_current_file(
+                prior_merkle_files,
+                _indexed_file_paths(conn),
+                set(current_shas),
+            )
             delta = incremental.plan_delta(conn, current_shas)
             paths_to_chunk = (
                 set(current_shas)
-                if missing_prior_merkle
+                if force_full_rebuild
                 else delta.added | delta.modified
             )
 
@@ -113,14 +117,8 @@ def run(ns: argparse.Namespace) -> int:
         # Step 5: embed cache misses (skip the model load if there's nothing to embed).
         embedding_cache_hit_rate = 0.0
         quantized_embeddings = []
-        force_full_rebuild = False
-        if not chunks_buf:
-            embedder_model, embedder_dim, embedder_quant = _metadata_for_empty_update(
-                conn,
-                incremental_mode,
-            )
-            print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
-        else:
+        emb = None
+        if incremental_mode or chunks_buf:
             emb = embedder.make_embedder()
             embedder_model = emb.model_id
             embedder_dim = str(emb.dim)
@@ -146,6 +144,16 @@ def run(ns: argparse.Namespace) -> int:
                     set(current_shas),
                     warnings,
                 )
+        else:
+            embedder_model, embedder_dim, embedder_quant = _metadata_for_empty_update(
+                conn,
+                incremental_mode,
+            )
+
+        if not chunks_buf:
+            print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
+        else:
+            assert emb is not None
             print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
             print(f"[vectorize] embedder: {emb.model_id}", flush=True)
             cache_conn = None
@@ -194,7 +202,7 @@ def run(ns: argparse.Namespace) -> int:
         # Step 6: write chunks + embeddings.
         # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().
         if incremental_mode:
-            if force_full_rebuild or missing_prior_merkle:
+            if force_full_rebuild:
                 if chunked_paths != set(current_shas):
                     print(
                         "[vectorize] update aborted: full rebuild could not "
@@ -217,19 +225,26 @@ def run(ns: argparse.Namespace) -> int:
                     merkle_to_write[rel] = merkle_files[rel]
         else:
             delete_paths = set()
-            merkle_to_write = merkle_files
+            merkle_to_write = {
+                rel: merkle_files[rel]
+                for rel in chunked_paths
+            }
 
+        expected_chunk_paths = (
+            set(current_shas)
+            if incremental_mode and force_full_rebuild
+            else paths_to_chunk
+        )
         graph_source_files = _graph_source_files(
             source_files,
             set(merkle_to_write),
-            paths_to_chunk - chunked_paths,
-            incremental_mode,
+            expected_chunk_paths - chunked_paths,
         )
 
-        _clear_symbol_graph(conn)
-        _delete_file_chunks(conn, delete_paths)
-
         with conn:
+            _clear_symbol_graph(conn)
+            _delete_file_chunks(conn, delete_paths)
+
             inserted_chunk_ids: list[int] = []
             for c in chunks_buf:
                 cur = conn.execute(
@@ -254,34 +269,34 @@ def run(ns: argparse.Namespace) -> int:
                 db.insert_embedding(conn, chunk_id, q)
             incremental.write_merkle(conn, merkle_to_write)
 
-        all_chunk_ids, all_chunks = _load_chunks(conn)
+            all_chunk_ids, all_chunks = _load_chunks(conn)
 
-        nodes_symbol, edges_symbol = _write_symbol_graph(
-            conn,
-            src_dir,
-            graph_source_files,
-            all_chunks,
-            all_chunk_ids,
-            warnings,
-        )
-        graph.compute_pagerank(conn, warnings=warnings)
+            nodes_symbol, edges_symbol = _write_symbol_graph(
+                conn,
+                src_dir,
+                graph_source_files,
+                all_chunks,
+                all_chunk_ids,
+                warnings,
+            )
+            graph.compute_pagerank(conn, warnings=warnings)
 
-        # Step 7: meta + manifest.
-        _write_meta(
-            conn,
-            repo_name,
-            spec,
-            commit_sha,
-            embedder_model,
-            embedder_dim,
-            embedder_quant,
-            len(all_chunks),
-            nodes_symbol,
-            edges_symbol,
-            incremental.merkle_root(
-                {rel: sha for rel, (sha, _size) in merkle_to_write.items()}
-            ),
-        )
+            # Step 7: meta + manifest.
+            _write_meta(
+                conn,
+                repo_name,
+                spec,
+                commit_sha,
+                embedder_model,
+                embedder_dim,
+                embedder_quant,
+                len(all_chunks),
+                nodes_symbol,
+                edges_symbol,
+                incremental.merkle_root(
+                    {rel: sha for rel, (sha, _size) in merkle_to_write.items()}
+                ),
+            )
         manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
                                     file_count, len(all_chunks), warnings,
                                     embedding_cache_hit_rate)
@@ -360,10 +375,12 @@ def _chunk_selected_entries(
     return chunks_buf, chunked_paths
 
 
-def _missing_prior_merkle(conn) -> bool:
-    merkle_count = conn.execute("SELECT COUNT(*) FROM merkle_files").fetchone()[0]
-    chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    return merkle_count == 0 and chunk_count > 0
+def _missing_merkle_for_indexed_current_file(
+    prior_merkle_files: dict[str, tuple[str, int]],
+    indexed_file_paths: set[str],
+    current_file_paths: set[str],
+) -> bool:
+    return bool((indexed_file_paths & current_file_paths) - set(prior_merkle_files))
 
 
 def _read_merkle_files(conn) -> dict[str, tuple[str, int]]:
@@ -414,10 +431,7 @@ def _graph_source_files(
     source_files: list[tuple[str, str]],
     merkle_paths: set[str],
     failed_paths: set[str],
-    incremental_mode: bool,
 ) -> list[tuple[str, str]]:
-    if not incremental_mode:
-        return source_files
     graph_paths = merkle_paths - failed_paths
     return [
         (rel_file_path, language)
@@ -427,9 +441,8 @@ def _graph_source_files(
 
 
 def _clear_symbol_graph(conn) -> None:
-    with conn:
-        conn.execute("DELETE FROM edges")
-        conn.execute("DELETE FROM nodes")
+    conn.execute("DELETE FROM edges")
+    conn.execute("DELETE FROM nodes")
 
 
 def _delete_file_chunks(conn, file_paths: set[str]) -> None:
@@ -447,23 +460,22 @@ def _delete_file_chunks(conn, file_paths: set[str]) -> None:
     if not chunk_ids:
         return
     chunk_placeholders = ",".join("?" for _ in chunk_ids)
-    with conn:
-        conn.execute(
-            f"DELETE FROM vec_chunks WHERE chunk_id IN ({chunk_placeholders})",
-            chunk_ids,
-        )
-        conn.execute(
-            f"DELETE FROM symbol_trigrams WHERE chunk_id IN ({chunk_placeholders})",
-            chunk_ids,
-        )
-        conn.execute(
-            f"DELETE FROM chunk_clusters WHERE chunk_id IN ({chunk_placeholders})",
-            chunk_ids,
-        )
-        conn.execute(
-            f"DELETE FROM chunks WHERE id IN ({chunk_placeholders})",
-            chunk_ids,
-        )
+    conn.execute(
+        f"DELETE FROM vec_chunks WHERE chunk_id IN ({chunk_placeholders})",
+        chunk_ids,
+    )
+    conn.execute(
+        f"DELETE FROM symbol_trigrams WHERE chunk_id IN ({chunk_placeholders})",
+        chunk_ids,
+    )
+    conn.execute(
+        f"DELETE FROM chunk_clusters WHERE chunk_id IN ({chunk_placeholders})",
+        chunk_ids,
+    )
+    conn.execute(
+        f"DELETE FROM chunks WHERE id IN ({chunk_placeholders})",
+        chunk_ids,
+    )
 
 
 def _load_chunks(conn) -> tuple[list[int], list[chunker.Chunk]]:
@@ -551,9 +563,8 @@ def _write_symbol_graph(
         all_edges.extend(extracted.edges)
 
     if all_nodes:
-        with conn:
-            node_ids = graph.insert_nodes(conn, all_nodes)
-            graph.insert_edges(conn, all_edges, node_ids)
+        node_ids = graph.insert_nodes(conn, all_nodes)
+        graph.insert_edges(conn, all_edges, node_ids)
 
     nodes_symbol = conn.execute(
         "SELECT COUNT(*) FROM nodes WHERE kind != 'block'"
@@ -589,21 +600,28 @@ def _write_meta(
     edges_symbol,
     merkle_root_sha,
 ):
-    db.write_meta(conn, "schema_version", "1.0")
-    db.write_meta(conn, "indexed_at", str(int(time.time())))
-    db.write_meta(conn, "repo_origin", repo_origin)
-    db.write_meta(conn, "commit_sha", commit_sha or "")
-    db.write_meta(conn, "embedder_model", embedder_model)
-    db.write_meta(conn, "embedder_dim", embedder_dim)
-    db.write_meta(conn, "embedder_quant", embedder_quant)
-    db.write_meta(conn, "reranker_model", "")
-    db.write_meta(conn, "total_chunks", str(total_chunks))
-    db.write_meta(conn, "total_nodes_symbol", str(nodes_symbol))
-    db.write_meta(conn, "total_nodes_block", "0")
-    db.write_meta(conn, "total_edges_symbol", str(edges_symbol))
-    db.write_meta(conn, "total_edges_flow", "0")
-    db.write_meta(conn, "total_clusters", "0")
-    db.write_meta(conn, "merkle_root_sha", merkle_root_sha)
+    rows = [
+        ("schema_version", "1.0"),
+        ("indexed_at", str(int(time.time()))),
+        ("repo_origin", repo_origin),
+        ("commit_sha", commit_sha or ""),
+        ("embedder_model", embedder_model),
+        ("embedder_dim", embedder_dim),
+        ("embedder_quant", embedder_quant),
+        ("reranker_model", ""),
+        ("total_chunks", str(total_chunks)),
+        ("total_nodes_symbol", str(nodes_symbol)),
+        ("total_nodes_block", "0"),
+        ("total_edges_symbol", str(edges_symbol)),
+        ("total_edges_flow", "0"),
+        ("total_clusters", "0"),
+        ("merkle_root_sha", merkle_root_sha),
+    ]
+    conn.executemany(
+        "INSERT INTO meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rows,
+    )
 
 
 def _build_manifest(repo_name, repo_origin, src_dir, repo_dir, db_path,

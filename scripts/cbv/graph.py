@@ -103,8 +103,7 @@ def compute_pagerank(conn, warnings: list[str] | None = None) -> int:
         for (node_id,) in conn.execute("SELECT id FROM nodes WHERE kind != 'block'")
     }
     if not node_ids:
-        with conn:
-            conn.execute("UPDATE nodes SET pagerank = 0.0")
+        conn.execute("UPDATE nodes SET pagerank = 0.0")
         return 0
 
     g = nx.DiGraph()
@@ -131,12 +130,11 @@ def compute_pagerank(conn, warnings: list[str] | None = None) -> int:
         uniform = 1.0 / len(node_ids)
         scores = {node_id: uniform for node_id in node_ids}
 
-    with conn:
-        conn.execute("UPDATE nodes SET pagerank = 0.0")
-        conn.executemany(
-            "UPDATE nodes SET pagerank = ? WHERE id = ?",
-            [(float(score), int(node_id)) for node_id, score in scores.items()],
-        )
+    conn.execute("UPDATE nodes SET pagerank = 0.0")
+    conn.executemany(
+        "UPDATE nodes SET pagerank = ? WHERE id = ?",
+        [(float(score), int(node_id)) for node_id, score in scores.items()],
+    )
     return len(scores)
 
 

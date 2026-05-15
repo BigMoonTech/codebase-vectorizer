@@ -146,15 +146,20 @@ def test_update_only_rechunks_added_and_modified_files(incremental_source, tmp_p
     assert before_rows != after_rows
 
 
-def test_noop_update_preserves_existing_embedder_metadata(incremental_source, tmp_path):
+def test_noop_update_preserves_embedder_metadata_when_unchanged(
+    incremental_source,
+    tmp_path,
+):
     output_dir = tmp_path / "index"
     _run_vectorize(incremental_source, output_dir)
 
     conn = db.open_db(output_dir / "index.sqlite")
     try:
-        db.write_meta(conn, "embedder_model", "real://prior-model")
-        db.write_meta(conn, "embedder_dim", "768")
-        db.write_meta(conn, "embedder_quant", "float32")
+        before_meta = {
+            "model": db.read_meta(conn, "embedder_model"),
+            "dim": db.read_meta(conn, "embedder_dim"),
+            "quant": db.read_meta(conn, "embedder_quant"),
+        }
     finally:
         conn.close()
 
@@ -162,11 +167,15 @@ def test_noop_update_preserves_existing_embedder_metadata(incremental_source, tm
 
     conn = db.open_db(output_dir / "index.sqlite")
     try:
-        assert db.read_meta(conn, "embedder_model") == "real://prior-model"
-        assert db.read_meta(conn, "embedder_dim") == "768"
-        assert db.read_meta(conn, "embedder_quant") == "float32"
+        after_meta = {
+            "model": db.read_meta(conn, "embedder_model"),
+            "dim": db.read_meta(conn, "embedder_dim"),
+            "quant": db.read_meta(conn, "embedder_quant"),
+        }
     finally:
         conn.close()
+
+    assert after_meta == before_meta
 
 
 def test_update_schema_v1_missing_merkle_preserves_existing_db(
@@ -257,6 +266,44 @@ def test_update_schema_v1_missing_merkle_chunk_failure_preserves_index(
     assert merkle_count == 0
 
 
+def test_update_partial_missing_merkle_row_rebuilds_without_duplicate_chunks(
+    incremental_source,
+    tmp_path,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        before_changed = conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+        conn.execute("DELETE FROM merkle_files WHERE file_path = 'changed.py'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        after_total = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        after_changed = conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+        merkle_files = {
+            row[0]
+            for row in conn.execute("SELECT file_path FROM merkle_files")
+        }
+    finally:
+        conn.close()
+
+    assert after_total == before_total
+    assert after_changed == before_changed
+    assert merkle_files == {"changed.py", "removed.py", "zzz_stable.py"}
+
+
 def test_update_preserves_modified_file_when_rechunk_fails(
     incremental_source,
     tmp_path,
@@ -314,6 +361,138 @@ def test_update_preserves_modified_file_when_rechunk_fails(
     assert summary["warnings"] == ["chunk failed for changed.py: forced chunk failure"]
 
 
+def test_update_embedding_insert_failure_rolls_back_destructive_changes(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    (incremental_source / "changed.py").write_text(
+        "def before_symbol():\n"
+        "    return 'before-token'\n",
+        encoding="utf-8",
+    )
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_changed_chunks = conn.execute(
+            "SELECT content FROM chunks WHERE file_path = 'changed.py' ORDER BY id"
+        ).fetchall()
+        before_changed_sha = conn.execute(
+            "SELECT blob_sha FROM merkle_files WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+        before_counts = {
+            "chunks": conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+            "vec": conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0],
+            "nodes": conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+            "edges": conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
+        }
+        assert before_counts["nodes"] > 0
+    finally:
+        conn.close()
+
+    (incremental_source / "changed.py").write_text(
+        "def after_symbol():\n"
+        "    return 'after-token'\n",
+        encoding="utf-8",
+    )
+
+    def fail_insert_embedding(conn, chunk_id, int8_vec):
+        raise RuntimeError("forced embedding insert failure")
+
+    monkeypatch.setattr(vec_cmd.db, "insert_embedding", fail_insert_embedding)
+
+    ns = argparse.Namespace(
+        source=str(incremental_source),
+        output_dir=str(output_dir),
+        max_file_mb=1.5,
+        no_cache=False,
+        update=True,
+    )
+    with pytest.raises(RuntimeError, match="forced embedding insert failure"):
+        vec_cmd.run(ns)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        after_changed_chunks = conn.execute(
+            "SELECT content FROM chunks WHERE file_path = 'changed.py' ORDER BY id"
+        ).fetchall()
+        after_changed_sha = conn.execute(
+            "SELECT blob_sha FROM merkle_files WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+        after_counts = {
+            "chunks": conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+            "vec": conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0],
+            "nodes": conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+            "edges": conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
+        }
+        after_symbol_nodes = conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE name LIKE '%after_symbol%'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert after_changed_chunks == before_changed_chunks
+    assert "after-token" not in "\n".join(row[0] for row in after_changed_chunks)
+    assert after_changed_sha == before_changed_sha
+    assert after_counts == before_counts
+    assert after_symbol_nodes == 0
+
+
+def test_fresh_chunk_failure_is_retried_by_update(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    (incremental_source / "bad.py").write_text(
+        "def bad():\n"
+        "    return 'bad-token'\n",
+        encoding="utf-8",
+    )
+    real_chunk_file = vec_cmd.chunker.chunk_file
+
+    def fail_bad(path):
+        if Path(path).name == "bad.py":
+            raise RuntimeError("forced chunk failure")
+        return real_chunk_file(path)
+
+    monkeypatch.setattr(vec_cmd.chunker, "chunk_file", fail_bad)
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM merkle_files WHERE file_path = 'bad.py'"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE file_path = 'bad.py'"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE file_path = 'bad.py'"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(vec_cmd.chunker, "chunk_file", real_chunk_file)
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM merkle_files WHERE file_path = 'bad.py'"
+        ).fetchone()[0] == 1
+        bad_chunks = conn.execute(
+            "SELECT content FROM chunks WHERE file_path = 'bad.py'"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert bad_chunks
+    assert "bad-token" in "\n".join(row[0] for row in bad_chunks)
+
+
 def test_update_rebuilds_when_embedder_metadata_changes(
     incremental_source,
     tmp_path,
@@ -368,6 +547,54 @@ def test_update_rebuilds_when_embedder_metadata_changes(
     finally:
         cache_conn.close()
 
+    assert changed_cache_rows == chunk_count
+
+
+def test_noop_update_rebuilds_for_compatible_embedder_metadata_change(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    finally:
+        conn.close()
+
+    class ChangedStub(vec_cmd.embedder.StubEmbedder):
+        model_id = "stub://changed-noop"
+
+    monkeypatch.setattr(vec_cmd.embedder, "make_embedder", lambda: ChangedStub())
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        files = {
+            row[0]
+            for row in conn.execute("SELECT file_path FROM merkle_files")
+        }
+        assert db.read_meta(conn, "embedder_model") == "stub://changed-noop"
+        assert db.read_meta(conn, "embedder_dim") == "1536"
+        assert db.read_meta(conn, "embedder_quant") == "int8"
+        assert files == {"changed.py", "removed.py", "zzz_stable.py"}
+    finally:
+        conn.close()
+
+    cache_conn = sqlite3.connect(paths.embedding_cache_path())
+    try:
+        changed_cache_rows = cache_conn.execute(
+            "SELECT COUNT(*) FROM embedding_cache WHERE model_id = ?",
+            ("stub://changed-noop",),
+        ).fetchone()[0]
+    finally:
+        cache_conn.close()
+
+    assert chunk_count == before_chunk_count
     assert changed_cache_rows == chunk_count
 
 

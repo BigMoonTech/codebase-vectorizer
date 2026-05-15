@@ -453,6 +453,57 @@ def test_compute_pagerank_excludes_block_nodes_and_flow_edges():
     assert rows["pkg/a.py::source::block_1"] == 0.0
 
 
+def test_compute_pagerank_participates_in_outer_transaction():
+    conn = _conn()
+    ids = graph.insert_nodes(
+        conn,
+        [
+            SymbolNode(
+                kind="file",
+                name="pkg/a.py",
+                short_name="a.py",
+                file_path="pkg/a.py",
+                start_line=1,
+                end_line=1,
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/a.py::source",
+                short_name="source",
+                file_path="pkg/a.py",
+                start_line=2,
+                end_line=4,
+                parent_name="pkg/a.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/a.py::target",
+                short_name="target",
+                file_path="pkg/a.py",
+                start_line=6,
+                end_line=8,
+                parent_name="pkg/a.py",
+            ),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, 'calls', 1.0)",
+        (ids["pkg/a.py::source"], ids["pkg/a.py::target"]),
+    )
+    conn.commit()
+
+    try:
+        with conn:
+            graph.compute_pagerank(conn)
+            raise RuntimeError("rollback outer transaction")
+    except RuntimeError:
+        pass
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE pagerank != 0.0"
+    ).fetchone()[0] == 0
+
+
 def test_compute_pagerank_warns_and_uses_uniform_scores_when_networkx_does_not_converge(
     monkeypatch,
 ):
