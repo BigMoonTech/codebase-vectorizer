@@ -836,7 +836,7 @@ This task computes the global PageRank stored on `nodes.pagerank`. It is necessa
 - Create: `tests/unit/test_graph.py`
 - Create: `tests/unit/test_stats_cmd.py`
 
-- [ ] **Step 1: Add dependency and probe**
+- [x] **Step 1: Add dependency and probe**
 
 Append:
 
@@ -846,7 +846,7 @@ networkx>=3.2
 
 Add `networkx` to the bootstrap core probe import list.
 
-- [ ] **Step 2: Add PageRank function**
+- [x] **Step 2: Add PageRank function**
 
 In `graph.py`:
 
@@ -869,7 +869,7 @@ def compute_pagerank(conn) -> int:
     return len(scores)
 ```
 
-- [ ] **Step 3: Add `stats` command**
+- [x] **Step 3: Add `stats` command**
 
 Create `scripts/cbv/commands/stats.py`:
 
@@ -920,7 +920,7 @@ ps.add_argument("--top-k", type=int, default=10)
 
 Add dispatch entry for `stats`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run:
 

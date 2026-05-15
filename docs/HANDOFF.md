@@ -40,6 +40,7 @@ This handoff was updated after Task 3 approval:
 - Task 2A is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 3 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 4 checkpoint verification passed and is marked complete in the final completion plan.
+- Task 5 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -64,11 +65,20 @@ This handoff was updated after Task 3 approval:
   - Graph expansion is limited to dependency-style symbolic edges: `calls`, `imports`, `inherits`, and `references`.
   - Duplicate neighbor chunks use `MAX(edge.weight)`.
   - Tied graph-neighbor scores are ordered deterministically by `neighbor.chunk_id ASC` before `LIMIT`.
+- Task 5 landed across:
+  - `805306d slice 4 t1: compute pagerank and expose stats`
+  - `341393e slice 4 t1: address pagerank stats review`
+- Task 5 review fixes include:
+  - Fresh vectorize runs compute global PageRank before manifest/summary output.
+  - PageRank excludes block nodes and flow edges.
+  - PageRank convergence failure falls back to uniform scores and appends a warning.
+  - `stats` is wired through CLI and bootstrap, returns counts, top PageRank nodes, and cluster label details.
+  - `stats` handles legacy schema errors cleanly and defaults `top_k` for direct `Namespace` callers.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Milestone 2 Task 5: PageRank helper and `stats`.
+- Next action is Milestone 2 Task 5A: query-time Personalized PageRank for the full lane.
 
 ## Verified Baseline
 
@@ -93,6 +103,12 @@ Latest verification in the current session:
   - vectorize summary had `nodes_symbol: 31` and `edges_symbol: 34`;
   - fast query reported `pipeline_used: fast`;
   - full query reported `pipeline_used: full` and `expansion_size: 9`.
+- Task 5 focused verification: `32 passed`.
+- Task 5 full-suite regression: `297 passed, 1 skipped`.
+- Task 5 prepared-venv smoke passed:
+  - vectorized `tests/fixtures/simple-python`;
+  - `cbv stats simple-python --top-k 3` returned nonzero PageRank top nodes, highest `pkg/db.py::open_conn` at `0.104394`.
+- Task 5 targeted re-review approved with no findings.
 
 ## What Exists Today
 
@@ -121,6 +137,8 @@ Current Slice 3/Milestone 1 work adds:
 - Query router and `--lane auto|fast|full`.
 - Fast lane using symbol exact, identifier trigrams, and BM25 without dense embedding.
 - Full lane using BM25, dense, symbol exact, graph expansion, and RRF.
+- Global PageRank computation over symbol nodes during vectorize.
+- `stats` command with counts, cluster label details, and top PageRank nodes.
 
 Important implementation detail:
 
@@ -171,9 +189,9 @@ User requested:
 
 Recommended next action:
 
-1. Begin Milestone 2 Task 5: PageRank helper and `stats`.
-2. After Task 5 implementation, verification, and review pass, mark Task 5 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
-3. Continue with Task 5A for query-time Personalized PageRank before calling the full lane spec-complete.
+1. Begin Milestone 2 Task 5A: query-time Personalized PageRank for the full lane.
+2. After Task 5A implementation, verification, and review pass, mark Task 5A complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Continue with Task 6 for `relate`, `graph`, `flow`, and the `codebase-relate` skill.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.
