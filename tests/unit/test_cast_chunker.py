@@ -777,6 +777,7 @@ def test_common_javascript_typescript_function_forms_are_functions(
             b"obj.f = (/* c */ function () { return 1; });\n",
             "f",
         ),
+        ("javascript", b"const f = function g() { return 1; };\n", "f"),
     ],
 )
 def test_assigned_function_chunks_use_declarator_name(
@@ -808,6 +809,13 @@ def test_assigned_function_chunks_use_declarator_name(
         (
             "javascript",
             b"const handlers = { login: () => 1 };\n",
+            1500,
+            "function",
+            "module/function[login]",
+        ),
+        (
+            "javascript",
+            b"const handlers = { login: function named() { return 1; } };\n",
             1500,
             "function",
             "module/function[login]",
@@ -916,6 +924,14 @@ def test_nested_helper_function_inside_method_keeps_function_attribution():
         "return inner()" in chunk.content
         and "function[inner]" in chunk.ast_path
         for chunk in chunks
+    )
+    trailing_return_chunks = [
+        chunk for chunk in chunks if "return inner()" in chunk.content
+    ]
+    assert trailing_return_chunks, chunks
+    assert all(
+        chunk.ast_path == "module/class[C]/method[outer]/section"
+        for chunk in trailing_return_chunks
     )
 
 

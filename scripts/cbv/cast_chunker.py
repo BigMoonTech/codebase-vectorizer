@@ -253,6 +253,15 @@ def _extract_name_with_parents(
     parents,
     source: bytes,
 ) -> Optional[str]:
+    if (
+        language in _JAVASCRIPT_FAMILY_LANGUAGES
+        and node.type
+        in ("arrow_function", "function_expression", "generator_function")
+    ):
+        assigned_name = _extract_js_assigned_function_name(node, parents, source)
+        if assigned_name is not None:
+            return assigned_name
+
     direct_name = _extract_name(node, source)
     if direct_name is not None:
         return direct_name
@@ -793,7 +802,12 @@ def _slots_with_explicit_gaps(
         previous_slot = slot
 
     if cursor < end_byte:
-        out.extend(_split_gap_slots(cursor, end_byte, list(parents), budget))
+        gap_parents = (
+            list(previous_slot.parents)
+            if previous_slot is not None
+            else list(parents)
+        )
+        out.extend(_split_gap_slots(cursor, end_byte, gap_parents, budget))
 
     return out
 
