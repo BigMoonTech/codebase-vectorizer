@@ -78,6 +78,20 @@ def test_vectorize_populates_fts(tmp_home, source_repo):
     assert rows >= 1
 
 
+def test_vectorize_populates_symbol_trigrams(tmp_home, source_repo):
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+    vec_cmd.run(ns)
+    from cbv import db
+    conn = db.open_db(paths.repo_dir("upstream") / "index.sqlite")
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM symbol_trigrams WHERE symbol = 'helper'"
+        ).fetchone()
+        assert row[0] > 0
+    finally:
+        conn.close()
+
+
 def test_vectorize_writes_meta(tmp_home, source_repo):
     ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
     vec_cmd.run(ns)

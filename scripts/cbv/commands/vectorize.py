@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import List
 
-from cbv import chunker, db, embedder, paths, quantize, source, walker
+from cbv import chunker, db, embedder, identifiers, paths, quantize, source, walker
 
 BATCH_SIZE = 32
 
@@ -101,6 +101,14 @@ def run(ns: argparse.Namespace) -> int:
             )
         ids = [row[0] for row in conn.execute("SELECT id FROM chunks ORDER BY id").fetchall()]
         assert len(ids) == len(chunks_buf)
+        for chunk_id, c in zip(ids, chunks_buf):
+            conn.executemany(
+                "INSERT INTO symbol_trigrams (trigram, chunk_id, symbol, occurrences) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(trigram, chunk_id, symbol) DO UPDATE SET "
+                "occurrences = occurrences + excluded.occurrences",
+                identifiers.symbol_trigram_rows(chunk_id, c.content),
+            )
         for chunk_id, emb_row in zip(ids, embeddings):
             # quantize_int8 expects shape (N, dim); pass 1-row, take [0] for 1-D array.
             q = quantize.quantize_int8(emb_row.reshape(1, -1))[0]  # 1-D int8 array
