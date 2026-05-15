@@ -29,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="disable the cross-repo embedding cache")
     pv.add_argument("--update", action="store_true",
                     help="update an existing index instead of rebuilding when possible")
+    pv.add_argument("--bench", action="store_true",
+                    help="run benchmark queries after indexing")
 
     pq = sub.add_parser("query", help="Query an indexed repo")
     pq.add_argument("repo", help="indexed repo name")
@@ -42,6 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("repo", help="indexed repo name")
     ps.add_argument("--top-k", type=int, default=10,
                     help="number of PageRank nodes to return (default 10)")
+
+    pb = sub.add_parser("bench", help="Run retrieval benchmarks for an indexed repo")
+    pb.add_argument("repo", help="indexed repo name")
 
     pr = sub.add_parser("relate", help="Run graph relationship queries")
     pr.add_argument("repo", help="indexed repo name")
@@ -96,6 +101,8 @@ def _import_command(verb: str):
         from cbv.commands import query as mod
     elif verb == "stats":
         from cbv.commands import stats as mod
+    elif verb == "bench":
+        from cbv.commands import bench_cmd as mod
     elif verb == "relate":
         from cbv.commands import relate as mod
     elif verb == "graph":
@@ -117,6 +124,7 @@ DISPATCH: Dict[str, Callable[[argparse.Namespace], int]] = {
     "vectorize": lambda ns: _import_command("vectorize").run(ns),
     "query":     lambda ns: _import_command("query").run(ns),
     "stats":     lambda ns: _import_command("stats").run(ns),
+    "bench":     lambda ns: _import_command("bench").run(ns),
     "relate":    lambda ns: _import_command("relate").run(ns),
     "graph":     lambda ns: _import_command("graph").run(ns),
     "flow":      lambda ns: _import_command("flow").run(ns),

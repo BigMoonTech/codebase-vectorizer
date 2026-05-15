@@ -36,7 +36,7 @@ from cbv.paths import (  # noqa: E402
 
 REQS = SCRIPT_DIR / "requirements.txt"
 SUPPORTED_PY = {(3, 10), (3, 11), (3, 12), (3, 13)}
-ALLOWED_SUBCOMMANDS = {"vectorize", "query", "stats", "relate", "graph", "flow", "list"}
+ALLOWED_SUBCOMMANDS = {"vectorize", "query", "stats", "bench", "relate", "graph", "flow", "list"}
 CORE_DEPENDENCY_PROBE = (
     "import sqlite_vec, transformers, sentence_transformers, numpy, pathspec, requests, "
     "huggingface_hub, tree_sitter, tree_sitter_language_pack, networkx, umap, hdbscan"
@@ -156,11 +156,12 @@ def cmd_info() -> int:
 
 def usage() -> int:
     print(
-        "Usage: bootstrap.py {setup|vectorize|query|stats|relate|graph|flow|list|info} [args...]\n"
+        "Usage: bootstrap.py {setup|vectorize|query|stats|bench|relate|graph|flow|list|info} [args...]\n"
         "  setup                       create venv and install deps (idempotent)\n"
         "  vectorize <url|path>        index a repo\n"
         "  query <name> <question>     query an indexed repo\n"
         "  stats <name>                print counts and top PageRank nodes\n"
+        "  bench <name>                run retrieval benchmark queries\n"
         "  relate <name> <verb> ...    run graph relationship queries\n"
         "  graph <name> <symbol>       alias for relate neighbors\n"
         "  flow <name> <symbol>        alias for relate paths-through\n"

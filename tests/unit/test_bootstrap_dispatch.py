@@ -25,7 +25,7 @@ def test_cli_known_verbs():
     actions = {a.dest: a for a in parser._actions}
     sub = next(a for a in parser._actions if a.dest == "verb")
     choices = set(sub.choices.keys())
-    assert {"vectorize", "query", "stats", "list", "info", "relate", "graph", "flow"} <= choices
+    assert {"vectorize", "query", "stats", "list", "info", "relate", "graph", "flow", "bench"} <= choices
 
 
 def test_cli_dispatch_table_has_all_verbs():
@@ -53,6 +53,14 @@ def test_cli_parses_vectorize_no_cache_flag():
     assert ns.no_cache is True
 
 
+def test_cli_parses_vectorize_bench_flag():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["vectorize", "https://github.com/x/y", "--bench"])
+    assert ns.verb == "vectorize"
+    assert ns.source == "https://github.com/x/y"
+    assert ns.bench is True
+
+
 def test_cli_parses_query_args():
     parser = cli.build_parser()
     ns = parser.parse_args(["query", "myrepo", "how does auth work", "--top-k", "5"])
@@ -74,6 +82,13 @@ def test_cli_parses_stats_args():
     assert ns.verb == "stats"
     assert ns.repo == "myrepo"
     assert ns.top_k == 5
+
+
+def test_cli_parses_bench_args():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["bench", "myrepo"])
+    assert ns.verb == "bench"
+    assert ns.repo == "myrepo"
 
 
 def test_cli_parses_relate_args():
@@ -108,12 +123,14 @@ def test_bootstrap_usage_and_allowlist_include_stats(capsys):
     assert "relate" in bootstrap.ALLOWED_SUBCOMMANDS
     assert "graph" in bootstrap.ALLOWED_SUBCOMMANDS
     assert "flow" in bootstrap.ALLOWED_SUBCOMMANDS
+    assert "bench" in bootstrap.ALLOWED_SUBCOMMANDS
     bootstrap.usage()
     err = capsys.readouterr().err
     assert "stats <name>" in err
     assert "relate <name>" in err
     assert "graph <name>" in err
     assert "flow <name>" in err
+    assert "bench <name>" in err
 
 
 def test_bootstrap_core_dependency_probe_includes_networkx():

@@ -23,6 +23,7 @@ from typing import List
 import numpy as np
 
 from cbv import (
+    architecture,
     cache,
     chunker,
     clusters,
@@ -39,6 +40,7 @@ from cbv import (
     symbols,
     walker,
 )
+from cbv.commands import bench_cmd
 
 BATCH_SIZE = 32
 CLUSTER_INDEX_VERSION = "umap-hdbscan-v1"
@@ -401,6 +403,26 @@ def run(ns: argparse.Namespace) -> int:
                 ),
                 cluster_index_version,
             )
+            architecture_payload = _build_architecture_payload(
+                conn,
+                repo_name,
+                len(all_chunks),
+                nodes_symbol,
+                nodes_block,
+                edges_symbol,
+                edges_flow,
+                clusters_indexed,
+            )
+        architecture_text, architecture_warning = architecture.render_architecture(
+            architecture_payload,
+            writer=architecture.LocalLLMArchitectureWriter(),
+        )
+        if architecture_warning is not None:
+            warnings.append(architecture_warning)
+        (repo_dir / "ARCHITECTURE.md").write_text(
+            architecture_text,
+            encoding="utf-8",
+        )
         manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
                                     file_count, len(all_chunks), warnings,
                                     embedding_cache_hit_rate)
@@ -408,6 +430,12 @@ def run(ns: argparse.Namespace) -> int:
 
     finally:
         conn.close()
+
+    bench_results = {}
+    if getattr(ns, "bench", False):
+        _bench_rc, bench_results, bench_error = bench_cmd.run_bench(repo_name, emit=False)
+        if bench_error is not None:
+            warnings.append(f"bench failed: {bench_error}")
 
     # Step 8: emit v1.0 summary JSON on stdout (last line).
     elapsed = time.time() - t_start
@@ -426,7 +454,7 @@ def run(ns: argparse.Namespace) -> int:
         "elapsed_seconds": round(elapsed, 2),
         "embedding_cache_hit_rate": embedding_cache_hit_rate,
         "warnings": warnings,
-        "bench_results": {},               # Slice 14
+        "bench_results": bench_results,
     }
     print(json.dumps(summary), flush=True)
     return 0
@@ -1037,6 +1065,67 @@ def _write_meta(
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         rows,
     )
+
+
+def _build_architecture_payload(
+    conn,
+    repo_name: str,
+    chunks_indexed: int,
+    nodes_symbol: int,
+    nodes_block: int,
+    edges_symbol: int,
+    edges_flow: int,
+    clusters_indexed: int,
+) -> dict:
+    top_nodes = [
+        {
+            "name": name,
+            "kind": kind,
+            "file_path": file_path,
+            "pagerank": round(float(pagerank or 0.0), 6),
+        }
+        for name, kind, file_path, pagerank in conn.execute(
+            "SELECT name, kind, file_path, pagerank FROM nodes "
+            "WHERE kind != 'block' "
+            "ORDER BY pagerank DESC, name ASC LIMIT 20"
+        )
+    ]
+    cluster_summaries = [
+        {"label": label, "summary": summary, "size": int(size)}
+        for label, summary, size in conn.execute(
+            "SELECT label, summary, size FROM clusters ORDER BY label ASC, id ASC"
+        )
+    ]
+    pivotal_files = [
+        {
+            "file_path": file_path,
+            "chunks": int(chunk_count or 0),
+            "symbols": int(symbol_count or 0),
+            "pagerank": round(float(pagerank or 0.0), 6),
+        }
+        for file_path, chunk_count, symbol_count, pagerank in conn.execute(
+            "SELECT c.file_path, COUNT(DISTINCT c.id) AS chunk_count, "
+            "COUNT(DISTINCT n.id) AS symbol_count, "
+            "COALESCE(SUM(CASE WHEN n.kind != 'block' THEN n.pagerank ELSE 0 END), 0.0) AS pr "
+            "FROM chunks c LEFT JOIN nodes n ON n.file_path = c.file_path "
+            "GROUP BY c.file_path "
+            "ORDER BY pr DESC, symbol_count DESC, c.file_path ASC LIMIT 10"
+        )
+    ]
+    return {
+        "repo_name": repo_name,
+        "counts": {
+            "chunks": chunks_indexed,
+            "symbol_nodes": nodes_symbol,
+            "symbol_edges": edges_symbol,
+            "flow_nodes": nodes_block,
+            "flow_edges": edges_flow,
+            "clusters": clusters_indexed,
+        },
+        "top_nodes": top_nodes,
+        "clusters": cluster_summaries,
+        "pivotal_files": pivotal_files,
+    }
 
 
 def _build_manifest(repo_name, repo_origin, src_dir, repo_dir, db_path,
