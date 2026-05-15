@@ -102,6 +102,47 @@ def chunk_text(
     file_path: str,
     budget_bytes: int = 1500,
 ) -> Iterator[Chunk]:
+    """Yield chunks using cAST when supported, text windows otherwise."""
+    if not content:
+        return
+
+    try:
+        from cbv import cast_chunker, parser
+    except ImportError:
+        pass
+    else:
+        language_meta = parser.language_for_name(language)
+        if language_meta is not None:
+            source = content.encode("utf-8")
+            try:
+                tree = parser.parse(source, language_meta)
+            except Exception:
+                tree = None
+            if tree is not None:
+                yield from cast_chunker.cast_chunks(
+                    tree,
+                    source,
+                    language_name=language,
+                    file_path=file_path,
+                    budget_bytes=budget_bytes,
+                )
+                return
+
+    yield from _text_window_chunks(
+        content,
+        language=language,
+        file_path=file_path,
+        budget_bytes=budget_bytes,
+    )
+
+
+def _text_window_chunks(
+    content: str,
+    *,
+    language: str,
+    file_path: str,
+    budget_bytes: int = 1500,
+) -> Iterator[Chunk]:
     """Yield non-overlapping line-aware chunks under budget_bytes.
 
     Empty content yields no chunks. A single line longer than the budget
