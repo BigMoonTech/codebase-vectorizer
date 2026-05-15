@@ -45,6 +45,12 @@ This handoff was updated during Task 2 review. At the moment of this update:
   - Cross-file graph resolution filters by compatible kind and prefers same directory/package prefix.
   - JS/TS/TSX assigned functions are not emitted twice as both function and variable.
 - Task 3 is in progress with a fresh subagent.
+- Task 3 implementation landed at `f1f82cd`, with router coverage fix at `7855d29`, but is not yet approved.
+- Task 3 local verification passed (`12 passed`) and spec re-review passed.
+- Task 3 code-quality review found Important issues now assigned back to the Task 3 worker:
+  - Empty/whitespace-only queries route fast and can crash helper token extraction.
+  - Graph expansion traverses `contains` edges and should be limited to dependency-style symbolic edges.
+  - Graph expansion duplicate neighbor scores need deterministic grouping/ordering.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
@@ -137,11 +143,12 @@ User requested:
 Recommended next action:
 
 1. Finish Task 3 implementation and review loop.
-2. If Task 3 reviews pass, mark Task 3 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md` and commit the checklist update.
-3. After Task 3, run the Milestone 1 checkpoint before beginning Milestone 2.
-4. After each task is safely done, edit the plan to mark completed checklist items.
-5. Run each task's verification command before committing.
-6. Run the final full verification gate before calling v1.0 code-complete.
+2. Specifically verify empty-query handling and deterministic graph expansion edge filtering/aggregation.
+3. If Task 3 reviews pass, mark Task 3 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md` and commit the checklist update.
+4. After Task 3, run the Milestone 1 checkpoint before beginning Milestone 2.
+5. After each task is safely done, edit the plan to mark completed checklist items.
+6. Run each task's verification command before committing.
+7. Run the final full verification gate before calling v1.0 code-complete.
 
 ## Do Not Drift
 
