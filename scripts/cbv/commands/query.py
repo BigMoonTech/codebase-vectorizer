@@ -26,7 +26,7 @@ from typing import Dict, List
 
 import numpy as np
 
-from cbv import db, embedder, paths, quantize, query_router
+from cbv import db, embedder, graph, paths, quantize, query_router
 
 RRF_K = 60  # standard RRF damping constant
 GRAPH_EDGE_KINDS = ("calls", "imports", "inherits", "references")
@@ -84,11 +84,13 @@ def run(ns: argparse.Namespace) -> int:
                 k=RRF_K,
                 source_names=["bm25", "dense", "symbol"],
             )
-            expansion = _graph_expand(conn, [cid for cid, _, _ in seed[:20]])
+            seed_ids = [cid for cid, _, _ in seed[:20]]
+            expansion = _graph_expand(conn, seed_ids)
+            ppr_hits = graph.personalized_pagerank(conn, seed_ids, iterations=10)
             fused = _rrf(
-                [bm25_hits, dense_hits, sym_hits, expansion],
+                [bm25_hits, dense_hits, sym_hits, expansion, ppr_hits],
                 k=RRF_K,
-                source_names=["bm25", "dense", "symbol", "graph"],
+                source_names=["bm25", "dense", "symbol", "graph", "ppr"],
             )
         top = fused[: ns.top_k]
 

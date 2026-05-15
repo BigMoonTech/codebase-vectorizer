@@ -90,3 +90,7 @@ def test_full_lane_uses_graph_expansion(indexed, capsys):
     assert blob["pipeline_used"] == "full"
     assert blob["expansion_size"] > 0
     assert blob["results"]
+    assert any(
+        "ppr" in r["why_this_was_returned"] or "graph" in r["why_this_was_returned"]
+        for r in blob["results"]
+    )

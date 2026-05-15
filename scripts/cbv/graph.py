@@ -140,13 +140,100 @@ def compute_pagerank(conn, warnings: list[str] | None = None) -> int:
     return len(scores)
 
 
-def _weighted_pagerank(g, *, alpha: float = 0.85, max_iter: int = 100, tol: float = 1.0e-6):
+def personalized_pagerank(
+    conn,
+    seed_chunk_ids: list[int],
+    *,
+    iterations: int = 10,
+) -> dict[int, float]:
+    if not seed_chunk_ids:
+        return {}
+
+    import networkx as nx
+
+    node_to_chunk = {
+        int(node_id): int(chunk_id)
+        for node_id, chunk_id in conn.execute(
+            "SELECT id, chunk_id FROM nodes WHERE kind != 'block' AND chunk_id IS NOT NULL"
+        ).fetchall()
+    }
+    if not node_to_chunk:
+        return {}
+
+    seed_chunks = set(seed_chunk_ids)
+    seed_nodes = {
+        node_id
+        for node_id, chunk_id in node_to_chunk.items()
+        if chunk_id in seed_chunks
+    }
+    if not seed_nodes:
+        return {}
+
+    g = nx.DiGraph()
+    g.add_nodes_from(node_to_chunk)
+    placeholders = ",".join("?" for _ in PAGERANK_EDGE_KINDS)
+    for src, dst, weight in conn.execute(
+        f"SELECT src, dst, weight FROM edges WHERE kind IN ({placeholders})",
+        PAGERANK_EDGE_KINDS,
+    ):
+        src_id = int(src)
+        dst_id = int(dst)
+        if src_id in node_to_chunk and dst_id in node_to_chunk:
+            g.add_edge(src_id, dst_id, weight=float(weight))
+
+    personalization = {
+        node_id: 1.0 if node_id in seed_nodes else 0.1
+        for node_id in g.nodes
+    }
+    try:
+        scores = nx.pagerank(
+            g,
+            personalization=personalization,
+            max_iter=iterations,
+            weight="weight",
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name != "scipy":
+            raise
+        scores = _weighted_pagerank(
+            g,
+            max_iter=iterations,
+            personalization=personalization,
+        )
+    except nx.PowerIterationFailedConvergence:
+        return {chunk_id: 1.0 for chunk_id in seed_chunks if chunk_id in node_to_chunk.values()}
+
+    chunk_scores: dict[int, float] = {}
+    for node_id, score in scores.items():
+        chunk_id = node_to_chunk[int(node_id)]
+        chunk_scores[chunk_id] = max(chunk_scores.get(chunk_id, 0.0), float(score))
+    return chunk_scores
+
+
+def _weighted_pagerank(
+    g,
+    *,
+    alpha: float = 0.85,
+    max_iter: int = 100,
+    tol: float = 1.0e-6,
+    personalization: dict[int, float] | None = None,
+):
     nodes = list(g.nodes)
     if not nodes:
         return {}
     n = len(nodes)
     scores = {node: 1.0 / n for node in nodes}
-    base = (1.0 - alpha) / n
+    if personalization is None:
+        personalization_scores = {node: 1.0 / n for node in nodes}
+    else:
+        total = sum(float(personalization.get(node, 0.0)) for node in nodes)
+        if total == 0.0:
+            personalization_scores = {node: 1.0 / n for node in nodes}
+        else:
+            personalization_scores = {
+                node: float(personalization.get(node, 0.0)) / total
+                for node in nodes
+            }
     dangling_share = 1.0 / n
     out_weight = {
         node: sum(float(data.get("weight", 1.0)) for _, _, data in g.out_edges(node, data=True))
@@ -154,7 +241,10 @@ def _weighted_pagerank(g, *, alpha: float = 0.85, max_iter: int = 100, tol: floa
     }
 
     for _ in range(max_iter):
-        next_scores = {node: base for node in nodes}
+        next_scores = {
+            node: (1.0 - alpha) * personalization_scores[node]
+            for node in nodes
+        }
         dangling_total = sum(scores[node] for node in nodes if out_weight[node] == 0.0)
         for node in nodes:
             if out_weight[node] == 0.0:
