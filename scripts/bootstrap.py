@@ -83,6 +83,13 @@ def deps_installed(py: Path) -> bool:
     )
     if subprocess.run([str(py), "-c", core_probe], capture_output=True).returncode != 0:
         return False
+    parser_probe = (
+        "from tree_sitter_language_pack import get_parser; "
+        "p = get_parser('python'); "
+        "p.parse(b'x = 1')"
+    )
+    if subprocess.run([str(py), "-c", parser_probe], capture_output=True).returncode != 0:
+        return False
     cpu_ok = subprocess.run([str(py), "-c", "import llama_cpp"],
                             capture_output=True).returncode == 0
     gpu_ok = subprocess.run([str(py), "-c", "import torch"],
