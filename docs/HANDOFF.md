@@ -3,8 +3,8 @@
 ## Current State
 
 - Branch: `dev`
-- Current HEAD: `281cf27 docs: mark task 2 complete`
-- `dev` is ahead of `origin/dev` by seven local commits:
+- Current HEAD: `4ae7c94 slice 3 t2a: dedupe assigned function symbols`
+- `dev` is ahead of `origin/dev` by thirteen local commits plus the pending Task 2A checklist/handoff commit:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
   - `1d6bdc4 docs: mark task 1 complete`
@@ -12,6 +12,12 @@
   - `758be1e slice 3 t2: address symbol graph review`
   - `2104d5b slice 3 t2: preserve chunkless file nodes`
   - `281cf27 docs: mark task 2 complete`
+  - `d6fdc59 docs: update handoff for task 2a`
+  - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
+  - `f9a3a41 slice 3 t2a: address tag query review`
+  - `f42f28b docs: record task 2a review blockers`
+  - `c7dfb97 slice 3 t2a: complete query edge coverage`
+  - `4ae7c94 slice 3 t2a: dedupe assigned function symbols`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -24,15 +30,19 @@ This handoff was updated during Task 2 review. At the moment of this update:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
-- Task 2A is implemented at `c1cd773`, with a first review-fix commit at `f9a3a41`, but is not yet approved.
-- Task 2A local verification after the first fix passed (`28 passed`), and spec re-review passed.
-- Task 2A code-quality review then found spec-completeness blockers now assigned back to the Task 2A worker:
-  - `scripts/cbv/tag_queries.py` is shadowed by the `scripts/cbv/tag_queries/` package under normal `import cbv.tag_queries`; the sibling loader file must be made meaningfully used.
-  - Cross-file graph edge resolution must not link incompatible unique short names, e.g. a `calls` edge resolving to a unique `class` node.
-  - Tier-A query files must add real `reference.identifier`, `reference.inherits`, and `definition.variable` coverage instead of mostly definitions/imports/calls.
-  - Rust `impl_item` handling must not create duplicate full-name class nodes.
-  - Tier-A query failures must not silently fall back without vectorize warnings.
-  - Cross-file resolution should prefer same directory/package prefix before dropping ambiguous compatible candidates.
+- Task 2A is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 2A landed across:
+  - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
+  - `f9a3a41 slice 3 t2a: address tag query review`
+  - `c7dfb97 slice 3 t2a: complete query edge coverage`
+  - `4ae7c94 slice 3 t2a: dedupe assigned function symbols`
+- Task 2A review fixes include:
+  - Meaningful `cbv.tag_queries` loader/package coexistence.
+  - Tier-A `reference.identifier`, `reference.inherits`, and `definition.variable` coverage.
+  - Rust `impl_item` handling that avoids duplicate full-name class nodes.
+  - Supported Tier-A query failures propagate to vectorize warnings while preserving chunks/file nodes.
+  - Cross-file graph resolution filters by compatible kind and prefers same directory/package prefix.
+  - JS/TS/TSX assigned functions are not emitted twice as both function and variable.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
@@ -88,20 +98,17 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces still to implement:
 
-1. tags.scm-backed Tier-A symbol extraction.
-2. Query router with fast/full lanes.
-3. Graph expansion plus query-time Personalized PageRank.
-4. Cross-encoder reranking and refined-query hints.
-5. `codebase-relate`, plus `graph` and `flow` CLI aliases.
-6. Content-hash embedding cache.
-7. Merkle incremental indexing.
-8. Intra-procedural CFG/DFG flow edges and flow relate verbs.
-9. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
-10. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
-11. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
-12. README and skill docs aligned to final behavior.
-
-Task 2 note: symbol graph nodes/edges now exist as the planned bootstrap implementation, but do not call symbol extraction spec-complete until Task 2A lands.
+1. Query router with fast/full lanes.
+2. Graph expansion plus query-time Personalized PageRank.
+3. Cross-encoder reranking and refined-query hints.
+4. `codebase-relate`, plus `graph` and `flow` CLI aliases.
+5. Content-hash embedding cache.
+6. Merkle incremental indexing.
+7. Intra-procedural CFG/DFG flow edges and flow relate verbs.
+8. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
+9. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
+10. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
+11. README and skill docs aligned to final behavior.
 
 ## Completion Tracking Rule
 
@@ -127,13 +134,12 @@ User requested:
 
 Recommended next action:
 
-1. Finish Task 2A implementation and review loop.
-2. Specifically verify broad query edge coverage, Rust impl handling, query-failure warnings, tag-query loader/package coexistence, and graph compatible-kind/same-package edge resolution fixes.
-3. If Task 2A reviews pass, mark Task 2A complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md` and commit the checklist update.
-4. Continue with Task 3 using `superpowers:subagent-driven-development` with fresh subagents and review after each task.
-5. After each task is safely done, edit the plan to mark completed checklist items.
-6. Run each task's verification command before committing.
-7. Run the final full verification gate before calling v1.0 code-complete.
+1. Commit the Task 2A checklist/handoff update.
+2. Continue with Task 3 using `superpowers:subagent-driven-development` with fresh subagents and review after each task.
+3. After Task 3, run the Milestone 1 checkpoint before beginning Milestone 2.
+4. After each task is safely done, edit the plan to mark completed checklist items.
+5. Run each task's verification command before committing.
+6. Run the final full verification gate before calling v1.0 code-complete.
 
 ## Do Not Drift
 

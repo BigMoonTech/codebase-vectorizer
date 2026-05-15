@@ -487,7 +487,7 @@ git commit -m "slice 3 t2: populate symbol graph"
 - Modify: `tests/unit/test_symbols.py`
 - Modify: `tests/integration/test_full_index.py`
 
-- [ ] **Step 1: Add failing Tier-A symbol extraction tests**
+- [x] **Step 1: Add failing Tier-A symbol extraction tests**
 
 Add parametrized coverage to `tests/unit/test_symbols.py`:
 
@@ -521,7 +521,7 @@ def test_tier_a_tags_extract_defs_and_edges(language, filename, source, expected
     assert expected_edges <= edge_kinds
 ```
 
-- [ ] **Step 2: Run test and verify failure**
+- [x] **Step 2: Run test and verify failure**
 
 Run:
 
@@ -531,7 +531,7 @@ Run:
 
 Expected: FAIL for unsupported language query/capture coverage.
 
-- [ ] **Step 3: Create query loader**
+- [x] **Step 3: Create query loader**
 
 Create `scripts/cbv/tag_queries.py`:
 
@@ -566,7 +566,7 @@ def query_source(language_name: str) -> str:
 
 Also create `scripts/cbv/tag_queries/__init__.py` as an empty package marker.
 
-- [ ] **Step 4: Add query files**
+- [x] **Step 4: Add query files**
 
 Each `*.scm` file must expose captures using only these names:
 
@@ -584,7 +584,7 @@ Each `*.scm` file must expose captures using only these names:
 
 Use tree-sitter-language-pack's query API and the language-specific node names validated by `tests/unit/test_cast_chunker.py`. Keep query files small and explicit; do not depend on external runtime downloads.
 
-- [ ] **Step 5: Update `symbols.extract_symbols` to execute queries**
+- [x] **Step 5: Update `symbols.extract_symbols` to execute queries**
 
 Implementation requirements:
 - Load the tree-sitter `Language` object used by `parser.parse`.
@@ -595,7 +595,7 @@ Implementation requirements:
 - Resolve same-file references by exact `short_name`; resolve cross-file references by `short_name` + compatible kind, preferring same directory/package prefix. Leave ambiguous references unresolved rather than inventing edges.
 - Extract `tests`, `documents`, and `mentions` edges only when source file paths or comment/doc nodes make that relationship explicit.
 
-- [ ] **Step 6: Add integration assertions**
+- [x] **Step 6: Add integration assertions**
 
 In `tests/integration/test_full_index.py`, add assertions that the indexed simple fixture contains:
 
@@ -605,7 +605,7 @@ assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind IN ('contains','calls
 assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind='calls'").fetchone()[0] > 0
 ```
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 Run:
 
