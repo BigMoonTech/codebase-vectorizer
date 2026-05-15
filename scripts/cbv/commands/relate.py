@@ -359,13 +359,16 @@ def _flow_query(
         return _conditions_for_metadata(conn, query, top_k=top_k)
     if not node_ids:
         return []
+    line_range = _parse_line_range(target)
     path_results = _flow_paths_through(
         conn,
         node,
-        line_range=_parse_line_range(target),
+        line_range=line_range,
         top_k=top_k,
         hops=hops,
     )
+    if line_range is not None:
+        return path_results
     edge_results = _flow_edges(conn, node_ids, incoming=None, kinds=FLOW_EDGE_KINDS, top_k=top_k * 4)
     return _dedupe_flow_results([*path_results, *edge_results])[: max(top_k, len(path_results))]
 

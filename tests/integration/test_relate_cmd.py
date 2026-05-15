@@ -410,6 +410,14 @@ def test_flow_relate_verbs_return_semantic_paths_and_slices(
         for result in paths_blob["results"]
     )
 
+    rc, out_of_range_blob, _ = _run(
+        _ns(repo, "paths-through", "choose", target="99:100", hops=6),
+        capsys,
+    )
+    assert rc == 0
+    assert out_of_range_blob["warnings"] == []
+    assert out_of_range_blob["results"] == []
+
     rc, reaching_blob, _ = _run(_ns(repo, "reaching-definitions", "x@5"), capsys)
     assert rc == 0
     reaching_lines = {
