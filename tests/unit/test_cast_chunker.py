@@ -275,6 +275,31 @@ def test_cast_chunks_concat_invariant_multiple_functions():
     assert b"".join(c.content.encode("utf-8") for c in chunks) == src
 
 
+def test_cast_chunks_multiple_functions_do_not_merge_into_section():
+    src = (
+        b'"""Authentication helpers."""\n'
+        b"import hashlib\n"
+        b"\n"
+        b"def authenticate_user(username, password):\n"
+        b"    digest = hashlib.sha256(password.encode()).hexdigest()\n"
+        b"    return username == 'admin' and digest\n"
+        b"\n"
+        b"def issue_token(username):\n"
+        b"    return f'token:{username}'\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="auth.py", budget_bytes=1500,
+    )
+
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == src
+    assert any(
+        chunk.kind == "function" and chunk.name == "authenticate_user"
+        for chunk in chunks
+    ), chunks
+    assert not all(chunk.kind == "section" for chunk in chunks)
+
+
 def test_cast_chunks_concat_invariant_contiguous_byte_ranges():
     """Chunk byte ranges must tile [0, len(source)) contiguously."""
     src = (

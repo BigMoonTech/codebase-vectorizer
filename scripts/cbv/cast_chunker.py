@@ -529,7 +529,7 @@ def _greedy_merge_slots(slots: List[_Slot], budget: int, language_name: str) -> 
             )
             continue
 
-        if slot.end_byte - current.start_byte <= budget:
+        if _should_merge_slots(current, slot, budget, language_name):
             node, parents = _merged_representative(current, slot, language_name)
             current.end_byte = slot.end_byte
             current.node = node
@@ -546,6 +546,21 @@ def _greedy_merge_slots(slots: List[_Slot], budget: int, language_name: str) -> 
     if current is not None:
         out.append(current)
     return out
+
+
+def _should_merge_slots(
+    left: _Slot,
+    right: _Slot,
+    budget: int,
+    language_name: str,
+) -> bool:
+    if right.end_byte - left.start_byte > budget:
+        return False
+    if _slot_semantic_kind(left, language_name) and _slot_semantic_kind(
+        right, language_name
+    ):
+        return False
+    return True
 
 
 def _slot_semantic_kind(slot: _Slot, language_name: str) -> Optional[str]:
