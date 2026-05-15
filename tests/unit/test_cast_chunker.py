@@ -663,3 +663,36 @@ def test_rust_impl_function_emits_method_chunk_with_impl_path():
         chunk.ast_path == "module/class[?]/method[tick]"
         for chunk in method_chunks
     )
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "node_type", "expected_kind"),
+    [
+        ("javascript", b"class C {}\n", "class", "class"),
+        ("typescript", b"class C {}\n", "class", "class"),
+        ("tsx", b"class C {}\n", "class", "class"),
+        ("rust", b"struct C;\n", "struct_item", "class"),
+        ("rust", b"trait T { fn tick(&self); }\n", "trait_item", "class"),
+        ("java", b"enum E { A }\n", "enum_declaration", "class"),
+        ("java", b"record R(int x) {}\n", "record_declaration", "class"),
+        ("c", b"struct C { int x; };\n", "struct_specifier", "class"),
+        ("csharp", b"record R(int X);\n", "record_declaration", "class"),
+        ("csharp", b"enum E { A }\n", "enum_declaration", "class"),
+        (
+            "csharp",
+            b"class C { void M() { int Local() { return 1; } } }\n",
+            "local_function_statement",
+            "method",
+        ),
+    ],
+)
+def test_kind_mapping_planned_node_types(
+    language_name,
+    source,
+    node_type,
+    expected_kind,
+):
+    tree = _parse_language(language_name, source)
+    node, parents = _find_first_node_with_parents(tree.root_node, node_type)
+
+    assert cast_chunker._kind_for_node(language_name, node, parents) == expected_kind

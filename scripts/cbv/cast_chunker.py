@@ -131,22 +131,36 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
 
 CLASS_NODE_TYPES: dict[str, frozenset[str]] = {
     "python": frozenset(("class_definition",)),
-    "javascript": frozenset(("class_declaration",)),
-    "typescript": frozenset(("class_declaration", "interface_declaration")),
-    "tsx": frozenset(("class_declaration", "interface_declaration")),
+    "javascript": frozenset(("class", "class_declaration")),
+    "typescript": frozenset(("class", "class_declaration", "interface_declaration")),
+    "tsx": frozenset(("class", "class_declaration", "interface_declaration")),
     "go": frozenset(),
-    "rust": frozenset(("impl_item",)),
-    "java": frozenset(("class_declaration", "interface_declaration")),
-    "c": frozenset(),
+    "rust": frozenset(("impl_item", "struct_item", "trait_item")),
+    "java": frozenset(
+        (
+            "class_declaration",
+            "enum_declaration",
+            "interface_declaration",
+            "record_declaration",
+        )
+    ),
+    "c": frozenset(("struct_specifier",)),
     "cpp": frozenset(("class_specifier", "struct_specifier")),
     "ruby": frozenset(("class", "module")),
     "csharp": frozenset(
-        ("class_declaration", "interface_declaration", "struct_declaration")
+        (
+            "class_declaration",
+            "enum_declaration",
+            "interface_declaration",
+            "record_declaration",
+            "struct_declaration",
+        )
     ),
 }
 
 
 METHOD_NODE_TYPES: dict[str, frozenset[str]] = {
+    "csharp": frozenset(("local_function_statement",)),
     "go": frozenset(("method_declaration",)),
 }
 
