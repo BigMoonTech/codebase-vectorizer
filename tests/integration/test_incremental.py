@@ -205,14 +205,10 @@ def test_noop_update_with_current_clusters_does_not_reembed_for_clustering(
     finally:
         conn.close()
 
-    class CountingEmbedder(vec_cmd.embedder.StubEmbedder):
-        calls = 0
+    def fail_make_embedder():
+        raise AssertionError("make_embedder should not be called for no-op update")
 
-        def embed(self, texts):
-            self.__class__.calls += 1
-            return super().embed(texts)
-
-    monkeypatch.setattr(vec_cmd.embedder, "make_embedder", lambda: CountingEmbedder())
+    monkeypatch.setattr(vec_cmd.embedder, "make_embedder", fail_make_embedder)
 
     _run_vectorize(incremental_source, output_dir, update=True)
 
@@ -222,7 +218,6 @@ def test_noop_update_with_current_clusters_does_not_reembed_for_clustering(
     finally:
         conn.close()
 
-    assert CountingEmbedder.calls == 0
     assert cluster_count == 1
 
 
@@ -251,6 +246,22 @@ def test_cluster_backend_failure_preserves_existing_clusters_on_update(
                 (chunk_id,),
             )
             db.write_meta(conn, "total_clusters", "1")
+        before_chunks = conn.execute(
+            "SELECT file_path, content FROM chunks ORDER BY file_path, id"
+        ).fetchall()
+        before_merkle = conn.execute(
+            "SELECT file_path, blob_sha, size_bytes FROM merkle_files ORDER BY file_path"
+        ).fetchall()
+        before_nodes = conn.execute(
+            "SELECT kind, name, file_path, chunk_id FROM nodes ORDER BY id"
+        ).fetchall()
+        before_edges = conn.execute(
+            "SELECT src, dst, kind, weight, metadata FROM edges ORDER BY src, dst, kind"
+        ).fetchall()
+        before_meta = {
+            key: db.read_meta(conn, key)
+            for key in ("total_chunks", "total_clusters", "merkle_root_sha")
+        }
     finally:
         conn.close()
 
@@ -265,23 +276,46 @@ def test_cluster_backend_failure_preserves_existing_clusters_on_update(
 
     monkeypatch.setattr(vec_cmd.clusters, "cluster_embeddings", fail_cluster_embeddings)
 
-    _run_vectorize(incremental_source, output_dir, update=True)
-    summary = json.loads(
-        [line for line in capsys.readouterr().out.splitlines() if line.strip()][-1]
+    ns = argparse.Namespace(
+        source=str(incremental_source),
+        output_dir=str(output_dir),
+        max_file_mb=1.5,
+        no_cache=False,
+        update=True,
     )
+    assert vec_cmd.run(ns) != 0
 
     conn = db.open_db(output_dir / "index.sqlite")
     try:
+        after_chunks = conn.execute(
+            "SELECT file_path, content FROM chunks ORDER BY file_path, id"
+        ).fetchall()
+        after_merkle = conn.execute(
+            "SELECT file_path, blob_sha, size_bytes FROM merkle_files ORDER BY file_path"
+        ).fetchall()
+        after_nodes = conn.execute(
+            "SELECT kind, name, file_path, chunk_id FROM nodes ORDER BY id"
+        ).fetchall()
+        after_edges = conn.execute(
+            "SELECT src, dst, kind, weight, metadata FROM edges ORDER BY src, dst, kind"
+        ).fetchall()
         cluster_rows = conn.execute("SELECT id, label FROM clusters").fetchall()
         member_rows = conn.execute("SELECT chunk_id, cluster_id, membership FROM chunk_clusters").fetchall()
-        total_clusters = db.read_meta(conn, "total_clusters")
+        after_meta = {
+            key: db.read_meta(conn, key)
+            for key in ("total_chunks", "total_clusters", "merkle_root_sha")
+        }
     finally:
         conn.close()
 
+    assert after_chunks == before_chunks
+    assert after_merkle == before_merkle
+    assert after_nodes == before_nodes
+    assert after_edges == before_edges
     assert cluster_rows == [(1, "existing")]
     assert member_rows == [(chunk_id, 1, 0.9)]
-    assert total_clusters == "1"
-    assert any("concept clustering failed: umap failed" in warning for warning in summary["warnings"])
+    assert after_meta == before_meta
+    assert "concept clustering failed: umap failed" in capsys.readouterr().out
 
 
 def test_update_schema_v1_missing_merkle_preserves_existing_db(

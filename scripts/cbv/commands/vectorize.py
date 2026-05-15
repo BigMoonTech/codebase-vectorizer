@@ -122,11 +122,30 @@ def run(ns: argparse.Namespace) -> int:
             warnings,
         )
 
+        no_delta_update = (
+            incremental_mode
+            and not force_full_rebuild
+            and delta is not None
+            and not delta.added
+            and not delta.modified
+            and not delta.removed
+        )
+        skip_cluster_rebuild = (
+            no_delta_update
+            and _clusters_current(conn)
+            and _cluster_count(conn) > 0
+        )
+
         # Step 5: embed cache misses (skip the model load if there's nothing to embed).
         embedding_cache_hit_rate = 0.0
         quantized_embeddings = []
         emb = None
-        if incremental_mode or chunks_buf:
+        if skip_cluster_rebuild and not chunks_buf:
+            embedder_model, embedder_dim, embedder_quant = _metadata_for_empty_update(
+                conn,
+                incremental_mode,
+            )
+        elif incremental_mode or chunks_buf:
             emb = embedder.make_embedder()
             embedder_model = emb.model_id
             embedder_dim = str(emb.dim)
@@ -157,15 +176,6 @@ def run(ns: argparse.Namespace) -> int:
                 conn,
                 incremental_mode,
             )
-        skip_cluster_rebuild = (
-            incremental_mode
-            and not force_full_rebuild
-            and delta is not None
-            and not delta.added
-            and not delta.modified
-            and not delta.removed
-            and _clusters_current(conn)
-        )
 
         if not chunks_buf:
             print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
@@ -258,6 +268,31 @@ def run(ns: argparse.Namespace) -> int:
             expected_chunk_paths - chunked_paths,
         )
 
+        if incremental_mode:
+            existing_chunk_ids, existing_chunks = _load_chunks(conn)
+            planned_all_chunks = [
+                c
+                for _chunk_id, c in zip(existing_chunk_ids, existing_chunks)
+                if c.file_path not in delete_paths
+            ]
+            planned_all_chunks.extend(chunks_buf)
+        else:
+            planned_all_chunks = list(chunks_buf)
+
+        if skip_cluster_rebuild:
+            cluster_plan = None
+            clusters_indexed = _cluster_count(conn)
+        else:
+            cluster_plan = _build_concept_cluster_plan(
+                planned_all_chunks,
+                emb,
+                warnings,
+            )
+            if cluster_plan is None:
+                detail = warnings[-1] if warnings else "concept clustering failed"
+                print(f"[vectorize] update aborted: {detail}", flush=True)
+                return 2
+
         with conn:
             _clear_symbol_graph(conn)
             _delete_file_chunks(conn, delete_paths)
@@ -287,6 +322,10 @@ def run(ns: argparse.Namespace) -> int:
             incremental.write_merkle(conn, merkle_to_write)
 
             all_chunk_ids, all_chunks = _load_chunks(conn)
+            if len(all_chunks) != len(planned_all_chunks):
+                raise RuntimeError(
+                    "planned chunk positions did not match committed chunk rows"
+                )
 
             nodes_symbol, edges_symbol = _write_symbol_graph(
                 conn,
@@ -306,23 +345,14 @@ def run(ns: argparse.Namespace) -> int:
             )
             graph.compute_pagerank(conn, warnings=warnings)
 
-        if skip_cluster_rebuild:
-            clusters_indexed = _cluster_count(conn)
-        else:
-            cluster_plan = _build_concept_cluster_plan(
-                all_chunk_ids,
-                all_chunks,
-                emb,
-                warnings,
-            )
-            if cluster_plan is None:
-                clusters_indexed = _cluster_count(conn)
-            else:
-                with conn:
-                    clusters_indexed = _write_concept_cluster_records(conn, cluster_plan)
+            if cluster_plan is not None:
+                clusters_indexed = _write_concept_cluster_records(
+                    conn,
+                    cluster_plan,
+                    all_chunk_ids,
+                )
 
-        # Step 7: meta + manifest.
-        with conn:
+            # Step 7: meta.
             _write_meta(
                 conn,
                 repo_name,
@@ -732,12 +762,11 @@ def _write_flow_graph(
 
 
 def _build_concept_cluster_plan(
-    chunk_ids: list[int],
     chunks_buf: list[chunker.Chunk],
     emb: embedder.Embedder | None,
     warnings: list[str],
 ) -> tuple[list[tuple[int, str, str, bytes, int]], list[tuple[int, int, float]]] | None:
-    if not chunk_ids:
+    if not chunks_buf:
         return [], []
 
     cluster_embedder = emb or embedder.make_embedder()
@@ -776,7 +805,7 @@ def _build_concept_cluster_plan(
             (int(cluster_id), label, summary, centroid.astype("float32").tobytes(), len(positions))
         )
         member_rows.extend(
-            (chunk_ids[idx], int(cluster_id), float(result.memberships[idx]))
+            (idx, int(cluster_id), float(result.memberships[idx]))
             for idx in positions
         )
     return cluster_rows, member_rows
@@ -785,8 +814,13 @@ def _build_concept_cluster_plan(
 def _write_concept_cluster_records(
     conn,
     cluster_plan: tuple[list[tuple[int, str, str, bytes, int]], list[tuple[int, int, float]]],
+    chunk_ids: list[int],
 ) -> int:
-    cluster_rows, member_rows = cluster_plan
+    cluster_rows, member_position_rows = cluster_plan
+    member_rows = [
+        (chunk_ids[position], cluster_id, membership)
+        for position, cluster_id, membership in member_position_rows
+    ]
     _clear_clusters(conn)
     conn.executemany(
         "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
