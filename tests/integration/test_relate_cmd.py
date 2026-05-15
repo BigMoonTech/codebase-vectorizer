@@ -95,6 +95,29 @@ def indexed_flow(monkeypatch, tmp_path, capsys):
     return {"repo": "flow-heavy", "summary": summary}
 
 
+def _index_source_tree(monkeypatch, tmp_path, capsys, repo_name: str, files: dict[str, str]) -> str:
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    source_dir = tmp_path / repo_name
+    source_dir.mkdir()
+    for rel_path, content in files.items():
+        path = source_dir / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    ns = argparse.Namespace(
+        source=str(source_dir),
+        output_dir=None,
+        max_file_mb=1.5,
+        no_cache=True,
+        update=False,
+    )
+    rc = vec_cmd.run(ns)
+    summary = json.loads([line for line in capsys.readouterr().out.splitlines() if line.strip()][-1])
+    assert rc == 0
+    assert summary["repo_name"] == repo_name
+    return repo_name
+
+
 def _run(ns, capsys):
     rc = relate.run(ns)
     captured = capsys.readouterr()
@@ -319,6 +342,125 @@ def test_flow_relate_verbs_return_indexed_flow_json(
             and "user.is_admin" in json.dumps(result["metadata"])
             for result in blob["results"]
         )
+
+
+def test_flow_dataflow_metadata_aggregates_duplicate_logical_edges(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    repo = _index_source_tree(
+        monkeypatch,
+        tmp_path,
+        capsys,
+        "same-edge-flow",
+        {
+            "pairs.py": (
+                "def pair(left_source, right_source):\n"
+                "    left, right = left_source, right_source\n"
+                "    return left + right\n"
+            )
+        },
+    )
+
+    conn = db.open_db(paths.repo_dir(repo) / "index.sqlite")
+    try:
+        rows = conn.execute(
+            "SELECT edge.metadata "
+            "FROM edges edge "
+            "JOIN nodes src ON src.id = edge.src "
+            "JOIN nodes dst ON dst.id = edge.dst "
+            "WHERE edge.kind = 'dataflow' "
+            "AND src.name = 'pairs.py::pair#block_1' "
+            "AND dst.name = 'pairs.py::pair#block_2'"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 1
+    metadata = json.loads(rows[0][0])
+    assert {item["variable"] for item in metadata["items"]} == {"left", "right"}
+
+    rc, left_blob, _ = _run(_ns(repo, "reaching-definitions", "left"), capsys)
+    assert rc == 0
+    assert any("left" in json.dumps(result["metadata"]) for result in left_blob["results"])
+
+    rc, right_blob, _ = _run(_ns(repo, "reaching-definitions", "right"), capsys)
+    assert rc == 0
+    assert any("right" in json.dumps(result["metadata"]) for result in right_blob["results"])
+
+
+def test_flow_blocks_parent_to_method_and_nested_function_symbols(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    repo = _index_source_tree(
+        monkeypatch,
+        tmp_path,
+        capsys,
+        "scope-flow",
+        {
+            "scopes.py": (
+                "class Alpha:\n"
+                "    def render(self, value):\n"
+                "        local = value\n"
+                "        return local\n"
+                "\n"
+                "class Beta:\n"
+                "    def render(self, value):\n"
+                "        local = value\n"
+                "        return local\n"
+                "\n"
+                "def outer(value):\n"
+                "    def inner(delta):\n"
+                "        result = value + delta\n"
+                "        return result\n"
+                "    return inner(value)\n"
+            )
+        },
+    )
+
+    conn = db.open_db(paths.repo_dir(repo) / "index.sqlite")
+    try:
+        symbol_rows = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT name, id FROM nodes "
+                "WHERE kind IN ('function', 'method') "
+                "AND name IN (?, ?, ?)",
+                (
+                    "scopes.py::Alpha::render",
+                    "scopes.py::Beta::render",
+                    "scopes.py::outer::inner",
+                ),
+            ).fetchall()
+        }
+        block_rows = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT name, parent_id FROM nodes "
+                "WHERE kind = 'block' "
+                "AND name IN (?, ?, ?)",
+                (
+                    "scopes.py::Alpha::render#block_1",
+                    "scopes.py::Beta::render#block_1",
+                    "scopes.py::outer::inner#block_1",
+                ),
+            ).fetchall()
+        }
+        legacy_method_blocks = conn.execute(
+            "SELECT COUNT(*) FROM nodes "
+            "WHERE kind = 'block' AND name = 'scopes.py::render#block_1'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert block_rows["scopes.py::Alpha::render#block_1"] == symbol_rows["scopes.py::Alpha::render"]
+    assert block_rows["scopes.py::Beta::render#block_1"] == symbol_rows["scopes.py::Beta::render"]
+    assert block_rows["scopes.py::outer::inner#block_1"] == symbol_rows["scopes.py::outer::inner"]
+    assert symbol_rows["scopes.py::Alpha::render"] != symbol_rows["scopes.py::Beta::render"]
+    assert legacy_method_blocks == 0
 
 
 def test_flow_queries_return_indexed_flow_edges(indexed_graph, capsys):

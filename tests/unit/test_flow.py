@@ -68,3 +68,54 @@ def test_extract_python_flow_emits_basic_approved_dataflow_metadata():
     assert approved_edges
     assert any(payload.get("variable") == "approved" for payload in approved_edges)
     assert any(payload.get("use_line") == 7 for payload in approved_edges)
+
+
+def test_extract_python_flow_uses_symbol_style_parent_symbols_for_methods_and_nested_functions():
+    source = (
+        "class Alpha:\n"
+        "    def render(self, value):\n"
+        "        return value\n"
+        "\n"
+        "class Beta:\n"
+        "    def render(self, value):\n"
+        "        return value\n"
+        "\n"
+        "def outer(value):\n"
+        "    def inner(delta):\n"
+        "        return value + delta\n"
+        "    return inner(value)\n"
+    )
+
+    nodes, _ = flow.extract_python_flow("scopes.py", source)
+
+    parent_symbols = {node.parent_symbol for node in nodes}
+    assert "scopes.py::Alpha::render" in parent_symbols
+    assert "scopes.py::Beta::render" in parent_symbols
+    assert "scopes.py::outer::inner" in parent_symbols
+    assert "scopes.py::render" not in parent_symbols
+    assert "scopes.py::inner" not in parent_symbols
+
+
+def test_extract_python_flow_prunes_nested_scope_dataflow_from_outer_function():
+    source = (
+        "def outer(seed):\n"
+        "    current = seed\n"
+        "    def inner():\n"
+        "        leaked = seed\n"
+        "        return leaked\n"
+        "    return current\n"
+    )
+
+    _, edges = flow.extract_python_flow("scope.py", source)
+
+    outer_leaked_edges = [
+        edge
+        for edge in edges
+        if edge.kind == "dataflow"
+        and (
+            edge.src_name.startswith("scope.py::outer#")
+            or edge.dst_name.startswith("scope.py::outer#")
+        )
+        and json.loads(edge.metadata or "{}").get("variable") == "leaked"
+    ]
+    assert outer_leaked_edges == []

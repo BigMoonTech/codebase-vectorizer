@@ -504,11 +504,30 @@ def _metadata_matches_query(raw: str | None, query: str) -> bool:
     if not raw:
         return False
     metadata = _parse_metadata(raw)
-    return query in {
-        str(metadata.get("variable", "")),
-        str(metadata.get("var", "")),
-        str(metadata.get("predicate", "")),
-    } or query in raw
+    return _metadata_contains_query(
+        metadata,
+        query,
+        keys={"variable", "var", "variables", "vars", "predicate"},
+    ) or query in raw
+
+
+def _metadata_contains_query(value: Any, query: str, *, keys: set[str]) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in keys and _metadata_value_equals(item, query):
+                return True
+            if _metadata_contains_query(item, query, keys=keys):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_metadata_contains_query(item, query, keys=keys) for item in value)
+    return False
+
+
+def _metadata_value_equals(value: Any, query: str) -> bool:
+    if isinstance(value, list):
+        return any(_metadata_value_equals(item, query) for item in value)
+    return str(value) == query
 
 
 def _find_symbol(conn, query: str, *, include_blocks: bool = False) -> dict[str, Any] | None:

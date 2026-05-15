@@ -648,20 +648,24 @@ def _write_flow_graph(
             )
             flow_node_ids[node.name] = int(cur.lastrowid)
 
+        edge_metadata: dict[tuple[int, int, str], list[str | None]] = {}
         for edge in flow_edges:
             src_id = flow_node_ids.get(edge.src_name) or function_ids.get(edge.src_name)
             dst_id = flow_node_ids.get(edge.dst_name) or function_ids.get(edge.dst_name)
             if src_id is None or dst_id is None:
                 continue
+            edge_metadata.setdefault((src_id, dst_id, edge.kind), []).append(edge.metadata)
+
+        for (src_id, dst_id, kind), metadata_values in edge_metadata.items():
             conn.execute(
                 "INSERT OR IGNORE INTO edges (src, dst, kind, weight, metadata) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (
                     src_id,
                     dst_id,
-                    edge.kind,
-                    FLOW_EDGE_WEIGHTS[edge.kind],
-                    edge.metadata,
+                    kind,
+                    FLOW_EDGE_WEIGHTS[kind],
+                    _aggregate_flow_metadata(metadata_values),
                 ),
             )
 
@@ -672,6 +676,47 @@ def _write_flow_graph(
         "SELECT COUNT(*) FROM edges WHERE kind IN ('controls', 'dataflow', 'guards')"
     ).fetchone()[0]
     return int(nodes_block), int(edges_flow)
+
+
+def _aggregate_flow_metadata(metadata_values: list[str | None]) -> str | None:
+    unique_values: list[str] = []
+    seen: set[str] = set()
+    for value in metadata_values:
+        if value is None or value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+
+    if not unique_values:
+        return None
+    if len(unique_values) == 1:
+        return unique_values[0]
+
+    items = [_parse_flow_metadata(value) for value in unique_values]
+    metadata: dict[str, object] = {"items": items}
+    variables = _ordered_metadata_values(items, "variable")
+    if variables:
+        metadata["variables"] = variables
+        metadata["vars"] = variables
+    return json.dumps(metadata, sort_keys=True)
+
+
+def _parse_flow_metadata(raw: str) -> dict[str, object]:
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"raw": raw}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _ordered_metadata_values(items: list[dict[str, object]], key: str) -> list[str]:
+    values: list[str] = []
+    for item in items:
+        value = item.get(key)
+        if not isinstance(value, str) or value in values:
+            continue
+        values.append(value)
+    return values
 
 
 def _chunk_id_containing_line(

@@ -146,9 +146,10 @@ def test_vectorize_warns_on_supported_query_failure_and_preserves_file_node(
     ]
     conn = db.open_db(output_dir / "index.sqlite")
     assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 0
-    assert ("file", "broken.py", "broken.py") in conn.execute(
-        "SELECT kind, name, short_name FROM nodes"
+    non_block_rows = conn.execute(
+        "SELECT kind, name, short_name FROM nodes WHERE kind != 'block'"
     ).fetchall()
+    assert non_block_rows == [("file", "broken.py", "broken.py")]
 
 
 def test_query_for_authenticate_finds_auth_py(indexed, capsys):

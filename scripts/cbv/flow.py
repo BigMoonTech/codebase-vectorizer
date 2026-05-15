@@ -29,8 +29,7 @@ def extract_python_flow(file_path: str, source: str) -> tuple[list[FlowNode], li
     nodes: list[FlowNode] = []
     edges: list[FlowEdge] = []
 
-    for fn in _function_defs(tree):
-        parent = f"{file_path}::{fn.name}"
+    for fn, parent in _function_defs(tree, file_path):
         previous_name: str | None = None
         last_defs: dict[str, tuple[str, int]] = {
             arg.arg: (parent, getattr(arg, "lineno", fn.lineno))
@@ -99,12 +98,26 @@ def extract_python_flow(file_path: str, source: str) -> tuple[list[FlowNode], li
     return nodes, _dedupe_edges(edges)
 
 
-def _function_defs(tree: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    ]
+def _function_defs(
+    tree: ast.AST,
+    file_path: str,
+) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]]:
+    definitions: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]] = []
+
+    def visit(node: ast.AST, parent_symbol: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                symbol = f"{parent_symbol}::{child.name}"
+                definitions.append((child, symbol))
+                visit(child, symbol)
+                continue
+            if isinstance(child, ast.ClassDef):
+                visit(child, f"{parent_symbol}::{child.name}")
+                continue
+            visit(child, parent_symbol)
+
+    visit(tree, file_path)
+    return definitions
 
 
 def _json_guard_metadata(stmt: ast.If) -> str:
@@ -154,9 +167,7 @@ def _json_dataflow_metadata(variable: str, definition_line: int, use_line: int) 
 
 def _store_names(stmt: ast.AST) -> dict[str, int]:
     stores: dict[str, int] = {}
-    for node in ast.walk(stmt):
-        if _is_nested_scope(stmt, node):
-            continue
+    for node in _scope_visible_nodes(stmt):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             stores.setdefault(node.id, int(getattr(node, "lineno", getattr(stmt, "lineno", 0))))
     return stores
@@ -164,19 +175,26 @@ def _store_names(stmt: ast.AST) -> dict[str, int]:
 
 def _load_names(stmt: ast.AST) -> dict[str, int]:
     loads: dict[str, int] = {}
-    for node in ast.walk(stmt):
-        if _is_nested_scope(stmt, node):
-            continue
+    for node in _scope_visible_nodes(stmt):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             loads.setdefault(node.id, int(getattr(node, "lineno", getattr(stmt, "lineno", 0))))
     return loads
 
 
-def _is_nested_scope(root: ast.AST, node: ast.AST) -> bool:
-    return node is not root and isinstance(
-        node,
-        (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
-    )
+_NESTED_SCOPE_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def _scope_visible_nodes(root: ast.AST):
+    if isinstance(root, _NESTED_SCOPE_TYPES):
+        return
+
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node is not root and isinstance(node, _NESTED_SCOPE_TYPES):
+            continue
+        yield node
+        stack.extend(reversed(list(ast.iter_child_nodes(node))))
 
 
 def _dedupe_edges(edges: list[FlowEdge]) -> list[FlowEdge]:
