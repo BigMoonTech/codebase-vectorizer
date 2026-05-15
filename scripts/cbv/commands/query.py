@@ -123,14 +123,24 @@ def run(ns: argparse.Namespace) -> int:
                 "why_this_was_returned": "+".join(sorted(sources)),
             })
 
-        if lane == "full":
+        if lane == "full" and candidate_rows:
             rr = reranker.make_reranker()
             scores = rr.score(ns.question, [row["preview"] for row in candidate_rows])
+            if len(scores) != len(candidate_rows):
+                print(
+                    f"reranker returned {len(scores)} scores for "
+                    f"{len(candidate_rows)} candidate rows",
+                    file=sys.stderr,
+                )
+                return 2
             for row, score in zip(candidate_rows, scores):
                 row["score"] = float(score)
             candidate_rows.sort(key=lambda row: float(row["score"]), reverse=True)
             reranker_model = rr.model_id
             refined_queries = _refined_queries(ns.question, candidate_rows[: ns.top_k])
+        elif lane == "full":
+            reranker_model = None
+            refined_queries = _refined_queries(ns.question, candidate_rows)
         else:
             reranker_model = None
             refined_queries = []

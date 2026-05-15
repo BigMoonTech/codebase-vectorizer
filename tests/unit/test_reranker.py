@@ -15,7 +15,7 @@ def test_stub_reranker_scores_lexical_overlap_case_insensitively():
     rr = reranker.StubReranker()
 
     scores = rr.score(
-        "Database Fetch",
+        "Database, Fetch",
         [
             "fetch rows from the database",
             "render the page",

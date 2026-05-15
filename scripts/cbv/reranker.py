@@ -16,15 +16,12 @@ class StubReranker(Reranker):
     model_id = "stub://lexical-overlap-reranker"
 
     def score(self, query: str, passages: list[str]) -> list[float]:
-        q = {p.lower() for p in query.split()}
+        q = {_normalize_token(p) for p in query.split()}
         return [
             float(
                 len(
                     q
-                    & {
-                        p.lower().strip(".,:;()[]{}")
-                        for p in passage.split()
-                    }
+                    & {_normalize_token(p) for p in passage.split()}
                 )
             )
             for passage in passages
@@ -48,3 +45,7 @@ def make_reranker() -> Reranker:
     if os.environ.get("CBV_STUB_RERANKER") == "1" or os.environ.get("CBV_STUB_EMBEDDER") == "1":
         return StubReranker()
     return SentenceTransformerReranker()
+
+
+def _normalize_token(token: str) -> str:
+    return token.lower().strip(".,:;()[]{}")

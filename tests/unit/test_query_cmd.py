@@ -43,6 +43,18 @@ def indexed_repo(monkeypatch, tmp_path):
     return "upstream"
 
 
+@pytest.fixture
+def empty_indexed_repo(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    src = tmp_path / "empty"
+    src.mkdir()
+    ns = argparse.Namespace(source=str(src), output_dir=None, max_file_mb=1.5)
+    rc = vec_cmd.run(ns)
+    assert rc == 0
+    return "empty"
+
+
 def test_query_returns_lane_shape_without_explicit_lane(indexed_repo, capsys):
     ns = argparse.Namespace(
         repo=indexed_repo,
@@ -124,6 +136,63 @@ def test_fast_lane_does_not_instantiate_reranker(indexed_repo, capsys, monkeypat
     assert blob["reranker_model"] is None
     assert blob["refined_queries"] == []
     assert len(blob["results"]) <= 1
+
+
+def test_full_lane_empty_candidates_does_not_instantiate_reranker(
+    empty_indexed_repo,
+    capsys,
+    monkeypatch,
+):
+    def fail_make_reranker():
+        raise AssertionError("empty full lane must not instantiate reranker")
+
+    monkeypatch.setattr(query_cmd.reranker, "make_reranker", fail_make_reranker)
+    ns = argparse.Namespace(
+        repo=empty_indexed_repo,
+        question="anything to search",
+        top_k=3,
+        lane="full",
+    )
+
+    rc = query_cmd.run(ns)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    blob = json.loads([l for l in out.strip().splitlines() if l.strip()][-1])
+    assert blob["pipeline_used"] == "full"
+    assert blob["results"] == []
+    assert blob["refined_queries"] == ["anything to search"]
+    assert blob["reranker_model"] is None
+
+
+def test_full_lane_rejects_mismatched_reranker_score_count(
+    indexed_repo,
+    capsys,
+    monkeypatch,
+):
+    class ShortScoreReranker:
+        model_id = "fake://short-score"
+
+        def score(self, query, passages):
+            return [0.0]
+
+    monkeypatch.setattr(
+        query_cmd.reranker,
+        "make_reranker",
+        lambda: ShortScoreReranker(),
+    )
+    ns = argparse.Namespace(
+        repo=indexed_repo,
+        question="fetch SELECT users",
+        top_k=1,
+        lane="full",
+    )
+
+    rc = query_cmd.run(ns)
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "reranker returned 1 scores for" in err
 
 
 def test_refined_queries_return_original_query_when_no_rows():
