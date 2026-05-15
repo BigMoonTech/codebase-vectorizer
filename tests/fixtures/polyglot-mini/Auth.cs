@@ -1,9 +1,14 @@
 using System;
 
-class Auth
+class Base {}
+interface ILogin {}
+
+class Auth : Base, ILogin
 {
+    int token = seed;
+
     void Login()
     {
-        Check();
+        Check(token);
     }
 }

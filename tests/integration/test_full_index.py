@@ -21,6 +21,7 @@ import pytest
 from cbv.commands import query as query_cmd, vectorize as vec_cmd  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "simple-python"
+POLYGLOT_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "polyglot-mini"
 
 
 @pytest.fixture
@@ -32,6 +33,16 @@ def indexed(monkeypatch, tmp_path):
     rc = vec_cmd.run(ns)
     assert rc == 0
     return "simple-python"
+
+
+@pytest.fixture
+def indexed_polyglot(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    ns = argparse.Namespace(source=str(POLYGLOT_FIXTURE), output_dir=None, max_file_mb=1.5)
+    rc = vec_cmd.run(ns)
+    assert rc == 0
+    return "polyglot-mini"
 
 
 def test_index_files_count_matches_fixture(indexed):
@@ -78,6 +89,56 @@ def test_symbol_graph_is_populated(indexed):
     assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind='calls'").fetchone()[0] > 0
     assert int(db.read_meta(conn, "total_nodes_symbol")) == nodes_symbol
     assert int(db.read_meta(conn, "total_edges_symbol")) == edges_symbol
+
+
+def test_polyglot_fixture_indexes_query_backed_symbol_edges(indexed_polyglot):
+    from cbv import db, paths
+
+    conn = db.open_db(paths.repo_dir(indexed_polyglot) / "index.sqlite")
+
+    assert conn.execute("SELECT COUNT(*) FROM nodes WHERE kind='variable'").fetchone()[0] > 0
+    assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind='inherits'").fetchone()[0] > 0
+    assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind='references'").fetchone()[0] > 0
+    assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind='calls'").fetchone()[0] > 0
+
+
+def test_vectorize_warns_on_supported_query_failure_and_preserves_file_node(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    from cbv import db, symbols
+
+    source_dir = tmp_path / "query-failure-src"
+    source_dir.mkdir()
+    (source_dir / "broken.py").write_text(
+        "def route():\n    return 1\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "index-out"
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+
+    def fail_query_captures(language, tree):
+        raise RuntimeError("forced query failure")
+
+    monkeypatch.setattr(symbols, "_query_captures", fail_query_captures)
+
+    ns = argparse.Namespace(source=str(source_dir), output_dir=str(output_dir), max_file_mb=1.5)
+    rc = vec_cmd.run(ns)
+    summary = json.loads(
+        [line for line in capsys.readouterr().out.splitlines() if line.strip()][-1]
+    )
+
+    assert rc == 0
+    assert summary["warnings"] == [
+        "symbol extraction failed for broken.py: forced query failure"
+    ]
+    conn = db.open_db(output_dir / "index.sqlite")
+    assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 0
+    assert conn.execute(
+        "SELECT kind, name, short_name FROM nodes"
+    ).fetchall() == [("file", "broken.py", "broken.py")]
 
 
 def test_query_for_authenticate_finds_auth_py(indexed, capsys):

@@ -1,6 +1,13 @@
 import os
 
 
-class Auth:
+class Base:
+    pass
+
+
+class Auth(Base):
+    token = os.getenv("TOKEN")
+
     def login(self):
-        return os.getenv("X")
+        user = current_user
+        return check(user)

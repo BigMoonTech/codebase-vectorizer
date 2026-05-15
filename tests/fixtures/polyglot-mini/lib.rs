@@ -2,6 +2,8 @@ use crate::auth;
 
 struct User;
 
-fn login() {
-    auth::check();
+impl User {
+    fn login(&self) {
+        auth::check();
+    }
 }

@@ -78,6 +78,7 @@ _IDENTIFIER_NODE_TYPES = frozenset(
         "field_identifier",
         "private_property_identifier",
         "package_identifier",
+        "constant",
         "qualified_identifier",
         "scoped_identifier",
         "destructor_name",
@@ -108,10 +109,9 @@ def extract_symbols(
     if tree is None:
         return ExtractedSymbols([_file_node(file_path, source)], [])
 
-    try:
-        return _extract_symbols_with_queries(file_path, language, source, tree)
-    except Exception:
+    if parser.language_for_name(language) is None:
         return _extract_symbols_bootstrap(file_path, language, source, tree)
+    return _extract_symbols_with_queries(file_path, language, source, tree)
 
 
 def _extract_symbols_with_queries(
@@ -276,11 +276,18 @@ def _looks_like_definition_container(node) -> bool:
         "struct_item",
         "enum_item",
         "trait_item",
-        "impl_item",
         "function_declarator",
         "function_definition",
         "class_specifier",
         "struct_specifier",
+        "assignment",
+        "field_declaration",
+        "init_declarator",
+        "let_declaration",
+        "public_field_definition",
+        "short_var_declaration",
+        "var_spec",
+        "variable_declarator",
         "method",
         "singleton_method",
         "module",
@@ -555,6 +562,12 @@ def _name_from_node(node, source: bytes) -> str | None:
         return _last_name_part(node, source)
 
     if node.type == "computed_property_name":
+        for child in node.children:
+            name = _name_from_node(child, source)
+            if name is not None:
+                return name
+
+    if node.type == "expression_list":
         for child in node.children:
             name = _name_from_node(child, source)
             if name is not None:

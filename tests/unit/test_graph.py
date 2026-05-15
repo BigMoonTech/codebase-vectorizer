@@ -290,6 +290,67 @@ def test_insert_edges_filters_short_name_resolution_by_compatible_kind():
     )
 
 
+def test_insert_edges_prefers_same_directory_for_compatible_short_name():
+    conn = _conn()
+    ids = graph.insert_nodes(
+        conn,
+        [
+            SymbolNode(
+                kind="file",
+                name="pkg/a.py",
+                short_name="a.py",
+                file_path="pkg/a.py",
+                start_line=1,
+                end_line=1,
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/a.py::route",
+                short_name="route",
+                file_path="pkg/a.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/a.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/helper.py::helper",
+                short_name="helper",
+                file_path="pkg/helper.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/helper.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="other/helper.py::helper",
+                short_name="helper",
+                file_path="other/helper.py",
+                start_line=1,
+                end_line=3,
+                parent_name="other/helper.py",
+            ),
+        ],
+    )
+
+    written = graph.insert_edges(
+        conn,
+        [
+            SymbolEdge(
+                kind="calls",
+                src_name="pkg/a.py::route",
+                dst_name="helper",
+            )
+        ],
+        ids,
+    )
+
+    assert written == 1
+    assert conn.execute("SELECT dst FROM edges").fetchall() == [
+        (ids["pkg/helper.py::helper"],)
+    ]
+
+
 def test_insert_edges_drops_unresolved_and_self_edges():
     conn = _conn()
     ids = graph.insert_nodes(

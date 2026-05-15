@@ -12,6 +12,20 @@ if str(SCRIPTS_DIR) not in sys.path:
 from cbv import parser, symbols, tag_queries  # noqa: E402
 
 
+def _extract(language: str, filename: str, source: bytes):
+    lang = parser.language_for_name(language)
+    tree = parser.parse(source, lang)
+    return symbols.extract_symbols(Path(filename), language, source, tree)
+
+
+def _edge_tuples(extracted):
+    return {(edge.src_name, edge.dst_name, edge.kind) for edge in extracted.edges}
+
+
+def _node_tuples(extracted):
+    return {(node.kind, node.name, node.short_name) for node in extracted.nodes}
+
+
 def test_tag_queries_package_reexports_sibling_loader():
     assert tag_queries.LOADER_SOURCE == "scripts/cbv/tag_queries.py"
     assert (
@@ -33,6 +47,38 @@ def test_python_symbols_extract_defs_imports_calls():
     assert any(e.kind == "calls" and e.dst_name == "authenticate_user" for e in extracted.edges)
 
 
+def test_python_tags_extract_exact_inherits_variables_references_and_contains():
+    src = (
+        b"class Base:\n"
+        b"    pass\n"
+        b"\n"
+        b"class Auth(Base):\n"
+        b"    token = make_token()\n"
+        b"    def login(self):\n"
+        b"        user = current_user\n"
+        b"        return helper(user)\n"
+    )
+    extracted = _extract("python", "pkg/auth.py", src)
+
+    assert {
+        ("class", "pkg/auth.py::Base", "Base"),
+        ("class", "pkg/auth.py::Auth", "Auth"),
+        ("variable", "pkg/auth.py::Auth::token", "token"),
+        ("method", "pkg/auth.py::Auth::login", "login"),
+        ("variable", "pkg/auth.py::Auth::login::user", "user"),
+    } <= _node_tuples(extracted)
+    assert {
+        ("pkg/auth.py", "pkg/auth.py::Base", "contains"),
+        ("pkg/auth.py", "pkg/auth.py::Auth", "contains"),
+        ("pkg/auth.py::Auth", "pkg/auth.py::Auth::login", "contains"),
+        ("pkg/auth.py::Auth", "pkg/auth.py::Base", "inherits"),
+        ("pkg/auth.py::Auth::token", "make_token", "calls"),
+        ("pkg/auth.py::Auth::login", "helper", "calls"),
+        ("pkg/auth.py::Auth::login::user", "current_user", "references"),
+        ("pkg/auth.py::Auth::login", "pkg/auth.py::Auth::login::user", "references"),
+    } <= _edge_tuples(extracted)
+
+
 def test_javascript_symbols_extract_function_and_call():
     src = b"export function camelCase(x) { return snakeCase(x); }\n"
     lang = parser.language_for_name("javascript")
@@ -40,6 +86,179 @@ def test_javascript_symbols_extract_function_and_call():
     extracted = symbols.extract_symbols(Path("util.js"), "javascript", src, tree)
     assert any(n.short_name == "camelCase" and n.kind == "function" for n in extracted.nodes)
     assert any(e.kind == "calls" and e.dst_name == "snakeCase" for e in extracted.edges)
+
+
+@pytest.mark.parametrize(
+    "language, filename, source, expected_nodes, expected_edges",
+    [
+        (
+            "javascript",
+            "web/auth.js",
+            b"class Auth extends Base { login() { const token = currentUser; return helper(token); } }\n",
+            {
+                ("class", "web/auth.js::Auth", "Auth"),
+                ("method", "web/auth.js::Auth::login", "login"),
+                ("variable", "web/auth.js::Auth::login::token", "token"),
+            },
+            {
+                ("web/auth.js::Auth", "Base", "inherits"),
+                ("web/auth.js::Auth::login", "helper", "calls"),
+                ("web/auth.js::Auth::login::token", "currentUser", "references"),
+                ("web/auth.js::Auth::login", "web/auth.js::Auth::login::token", "references"),
+            },
+        ),
+        (
+            "typescript",
+            "web/auth.ts",
+            b"class User extends Base implements Named { field = currentUser; login(): void { const token = helper(field); } }\n",
+            {
+                ("class", "web/auth.ts::User", "User"),
+                ("variable", "web/auth.ts::User::field", "field"),
+                ("method", "web/auth.ts::User::login", "login"),
+                ("variable", "web/auth.ts::User::login::token", "token"),
+            },
+            {
+                ("web/auth.ts::User", "Base", "inherits"),
+                ("web/auth.ts::User", "Named", "inherits"),
+                ("web/auth.ts::User::field", "currentUser", "references"),
+                ("web/auth.ts::User::login::token", "helper", "calls"),
+                ("web/auth.ts::User::login::token", "web/auth.ts::User::field", "references"),
+            },
+        ),
+        (
+            "tsx",
+            "web/view.tsx",
+            b"class View extends Component { render() { const label = props.title; return <button onClick={submit}>{label}</button>; } }\n",
+            {
+                ("class", "web/view.tsx::View", "View"),
+                ("method", "web/view.tsx::View::render", "render"),
+                ("variable", "web/view.tsx::View::render::label", "label"),
+            },
+            {
+                ("web/view.tsx::View", "Component", "inherits"),
+                ("web/view.tsx::View::render::label", "props", "references"),
+                ("web/view.tsx::View::render", "submit", "references"),
+                ("web/view.tsx::View::render", "web/view.tsx::View::render::label", "references"),
+            },
+        ),
+    ],
+)
+def test_js_family_tags_extract_exact_inherits_variables_and_references(
+    language,
+    filename,
+    source,
+    expected_nodes,
+    expected_edges,
+):
+    extracted = _extract(language, filename, source)
+
+    assert expected_nodes <= _node_tuples(extracted)
+    assert expected_edges <= _edge_tuples(extracted)
+
+
+@pytest.mark.parametrize(
+    "language, filename, source, expected_nodes, expected_edges",
+    [
+        (
+            "java",
+            "src/Auth.java",
+            b"class Auth extends Base implements Login { int token = seed; void login() { helper(token); } }\n",
+            {
+                ("class", "src/Auth.java::Auth", "Auth"),
+                ("variable", "src/Auth.java::Auth::token", "token"),
+                ("method", "src/Auth.java::Auth::login", "login"),
+            },
+            {
+                ("src/Auth.java::Auth", "Base", "inherits"),
+                ("src/Auth.java::Auth", "Login", "inherits"),
+                ("src/Auth.java::Auth::token", "seed", "references"),
+                ("src/Auth.java::Auth::login", "helper", "calls"),
+                ("src/Auth.java::Auth::login", "src/Auth.java::Auth::token", "references"),
+            },
+        ),
+        (
+            "csharp",
+            "src/Auth.cs",
+            b"class Auth : Base, ILogin { int token = seed; void Login() { Helper(token); } }\n",
+            {
+                ("class", "src/Auth.cs::Auth", "Auth"),
+                ("variable", "src/Auth.cs::Auth::token", "token"),
+                ("method", "src/Auth.cs::Auth::Login", "Login"),
+            },
+            {
+                ("src/Auth.cs::Auth", "Base", "inherits"),
+                ("src/Auth.cs::Auth", "ILogin", "inherits"),
+                ("src/Auth.cs::Auth::token", "seed", "references"),
+                ("src/Auth.cs::Auth::Login", "Helper", "calls"),
+                ("src/Auth.cs::Auth::Login", "src/Auth.cs::Auth::token", "references"),
+            },
+        ),
+        (
+            "cpp",
+            "src/auth.cpp",
+            b"class Auth : public Base { int token; void login() { helper(token); } };\n",
+            {
+                ("class", "src/auth.cpp::Auth", "Auth"),
+                ("variable", "src/auth.cpp::Auth::token", "token"),
+                ("method", "src/auth.cpp::Auth::login", "login"),
+            },
+            {
+                ("src/auth.cpp::Auth", "Base", "inherits"),
+                ("src/auth.cpp::Auth::login", "helper", "calls"),
+                ("src/auth.cpp::Auth::login", "src/auth.cpp::Auth::token", "references"),
+            },
+        ),
+    ],
+)
+def test_nominal_language_tags_extract_exact_inherits_variables_and_references(
+    language,
+    filename,
+    source,
+    expected_nodes,
+    expected_edges,
+):
+    extracted = _extract(language, filename, source)
+
+    assert expected_nodes <= _node_tuples(extracted)
+    assert expected_edges <= _edge_tuples(extracted)
+
+
+def test_c_tags_extract_exact_variables_and_references():
+    src = b"int global = seed; int login() { int token = global; return check(token); }\n"
+    extracted = _extract("c", "src/auth.c", src)
+
+    assert {
+        ("variable", "src/auth.c::global", "global"),
+        ("function", "src/auth.c::login", "login"),
+        ("variable", "src/auth.c::login::token", "token"),
+    } <= _node_tuples(extracted)
+    assert {
+        ("src/auth.c::global", "seed", "references"),
+        ("src/auth.c::login::token", "src/auth.c::global", "references"),
+        ("src/auth.c::login", "check", "calls"),
+        ("src/auth.c::login", "src/auth.c::login::token", "references"),
+    } <= _edge_tuples(extracted)
+
+
+def test_same_file_call_references_resolve_to_full_function_name():
+    src = b"def helper():\n    return 1\n\ndef caller():\n    return helper()\n"
+    extracted = _extract("python", "pkg/local.py", src)
+
+    assert (
+        "pkg/local.py::caller",
+        "pkg/local.py::helper",
+        "calls",
+    ) in _edge_tuples(extracted)
+
+
+def test_rust_impl_does_not_duplicate_struct_node_names():
+    src = b"struct User;\nimpl User { fn login(&self) {} }\n"
+    extracted = _extract("rust", "src/lib.rs", src)
+
+    names = [node.name for node in extracted.nodes]
+    assert names.count("src/lib.rs::User") == 1
+    assert ("class", "src/lib.rs::User", "User") in _node_tuples(extracted)
+    assert ("function", "src/lib.rs::login", "login") in _node_tuples(extracted)
 
 
 def test_extract_symbols_returns_file_node_when_tree_missing():

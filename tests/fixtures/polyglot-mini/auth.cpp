@@ -1,6 +1,15 @@
 #include <vector>
 
-class Auth {};
+class Base {};
+
+class Auth : public Base {
+    int token;
+
+    void login()
+    {
+        check(token);
+    }
+};
 
 int login()
 {
