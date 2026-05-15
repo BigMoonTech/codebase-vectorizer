@@ -34,6 +34,8 @@ _TS_FUNCTION_TYPES = frozenset(
         "function_definition",
         "function_item",
         "local_function_statement",
+        "method",
+        "singleton_method",
     }
 )
 _TS_CLASS_TYPES = frozenset(
@@ -61,7 +63,9 @@ _TS_LOOP_TYPES = frozenset(
         "for_statement",
         "for_in_statement",
         "for_range_loop",
+        "for_expression",
         "while_statement",
+        "while_expression",
         "do_statement",
         "loop_expression",
     )
@@ -81,6 +85,7 @@ _TS_IDENTIFIER_TYPES = frozenset(
         "identifier",
         "shorthand_property_identifier",
         "field_identifier",
+        "constant",
     )
 )
 
@@ -186,8 +191,8 @@ class _PythonFlowBuilder:
         self.nodes: list[FlowNode] = []
         self.edges: list[FlowEdge] = []
         self.block_index = 0
-        self.last_defs: dict[str, tuple[str, int]] = {
-            arg.arg: (self.entry_name, int(getattr(arg, "lineno", fn.lineno)))
+        self.reaching_defs: dict[str, list[tuple[str, int]]] = {
+            arg.arg: [(self.entry_name, int(getattr(arg, "lineno", fn.lineno)))]
             for arg in fn.args.args
         }
 
@@ -261,27 +266,38 @@ class _PythonFlowBuilder:
             return []
         if isinstance(stmt, ast.If):
             self.edges.append(FlowEdge(block_name, block_name, "guards", _json_guard_metadata(stmt)))
+            incoming_defs = _copy_reaching_defs(self.reaching_defs)
             body_exits = self._emit_statements(stmt.body, [block_name])
-            else_exits = self._emit_statements(stmt.orelse, [block_name]) if stmt.orelse else [block_name]
+            body_defs = _copy_reaching_defs(self.reaching_defs)
+            self.reaching_defs = _copy_reaching_defs(incoming_defs)
+            if stmt.orelse:
+                else_exits = self._emit_statements(stmt.orelse, [block_name])
+                else_defs = _copy_reaching_defs(self.reaching_defs)
+            else:
+                else_exits = [block_name]
+                else_defs = _copy_reaching_defs(incoming_defs)
+            self.reaching_defs = _merge_reaching_defs(body_defs, else_defs)
             return [*body_exits, *else_exits]
         if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
             self.edges.append(
                 FlowEdge(block_name, block_name, "guards", _json_loop_guard_metadata(stmt))
             )
+            incoming_defs = _copy_reaching_defs(self.reaching_defs)
             body_exits = self._emit_statements(stmt.body, [block_name])
+            body_defs = _copy_reaching_defs(self.reaching_defs)
             for body_exit in body_exits:
                 self.edges.append(FlowEdge(body_exit, block_name, "controls", None))
             orelse_exits = self._emit_statements(stmt.orelse, [block_name]) if stmt.orelse else []
+            orelse_defs = _copy_reaching_defs(self.reaching_defs)
+            self.reaching_defs = _merge_reaching_defs(incoming_defs, body_defs, orelse_defs)
             return [block_name, *orelse_exits]
         return [block_name]
 
     def _add_dataflow_edges(self, stmt: ast.stmt, block_name: str) -> None:
-        stores = _store_names(stmt)
-        loads = _load_names(stmt)
+        stores, loads = _python_statement_store_load_names(stmt)
         for variable, use_line in sorted(loads.items()):
-            prior = self.last_defs.get(variable)
-            if prior is not None:
-                def_name, def_line = prior
+            prior_defs = self.reaching_defs.get(variable, [])
+            for def_name, def_line in prior_defs:
                 self.edges.append(
                     FlowEdge(
                         def_name,
@@ -291,7 +307,40 @@ class _PythonFlowBuilder:
                     )
                 )
         for variable, def_line in sorted(stores.items()):
-            self.last_defs[variable] = (block_name, def_line)
+            self.reaching_defs[variable] = [(block_name, def_line)]
+
+
+def _python_statement_store_load_names(stmt: ast.stmt) -> tuple[dict[str, int], dict[str, int]]:
+    if isinstance(stmt, ast.If):
+        return {}, _load_names(stmt.test)
+    if isinstance(stmt, (ast.For, ast.AsyncFor)):
+        stores = _store_names(stmt.target)
+        loads = _load_names(stmt.iter)
+        return stores, loads
+    if isinstance(stmt, ast.While):
+        return {}, _load_names(stmt.test)
+    if isinstance(stmt, ast.Return):
+        return {}, _load_names(stmt.value) if stmt.value is not None else {}
+    return _store_names(stmt), _load_names(stmt)
+
+
+def _copy_reaching_defs(
+    defs: dict[str, list[tuple[str, int]]],
+) -> dict[str, list[tuple[str, int]]]:
+    return {variable: list(values) for variable, values in defs.items()}
+
+
+def _merge_reaching_defs(
+    *defs_maps: dict[str, list[tuple[str, int]]],
+) -> dict[str, list[tuple[str, int]]]:
+    merged: dict[str, list[tuple[str, int]]] = {}
+    for defs in defs_maps:
+        for variable, values in defs.items():
+            bucket = merged.setdefault(variable, [])
+            for value in values:
+                if value not in bucket:
+                    bucket.append(value)
+    return merged
 
 
 def _extract_python_flow_cfg(file_path: str, source: str) -> tuple[list[FlowNode], list[FlowEdge]]:
@@ -354,8 +403,8 @@ class _TreeSitterFlowBuilder:
         self.nodes: list[FlowNode] = []
         self.edges: list[FlowEdge] = []
         self.block_index = 0
-        self.last_defs: dict[str, tuple[str, int]] = {
-            name: (self.entry_name, _ts_start_line(fn_node))
+        self.reaching_defs: dict[str, list[tuple[str, int]]] = {
+            name: [(self.entry_name, _ts_start_line(fn_node))]
             for name in _ts_parameter_names(fn_node, source)
         }
 
@@ -425,53 +474,60 @@ class _TreeSitterFlowBuilder:
         return name
 
     def _statement_exits(self, stmt, block_name: str) -> list[str]:
-        if stmt.type in _TS_RETURN_TYPES:
+        control = _ts_control_node(stmt)
+        if control.type in _TS_RETURN_TYPES:
             self.edges.append(FlowEdge(block_name, self.exit_name, "controls", None))
             return []
-        if stmt.type in _TS_IF_TYPES:
+        if control.type in _TS_IF_TYPES:
             self.edges.append(
                 FlowEdge(
                     block_name,
                     block_name,
                     "guards",
-                    _json_ts_guard_metadata(stmt, self.source, branch="if"),
+                    _json_ts_guard_metadata(control, self.source, branch="if"),
                 )
             )
-            bodies = _ts_branch_bodies(stmt)
+            incoming_defs = _copy_reaching_defs(self.reaching_defs)
+            bodies = _ts_branch_bodies(control)
             body_exits = (
                 self._emit_statements(_ts_statement_children(bodies[0]), [block_name])
                 if bodies
                 else [block_name]
             )
+            body_defs = _copy_reaching_defs(self.reaching_defs)
+            self.reaching_defs = _copy_reaching_defs(incoming_defs)
             else_exits = (
                 self._emit_statements(_ts_statement_children(bodies[1]), [block_name])
                 if len(bodies) > 1 and bodies[1] is not None
                 else [block_name]
             )
+            else_defs = _copy_reaching_defs(self.reaching_defs if len(bodies) > 1 and bodies[1] is not None else incoming_defs)
+            self.reaching_defs = _merge_reaching_defs(body_defs, else_defs)
             return [*body_exits, *else_exits]
-        if stmt.type in _TS_LOOP_TYPES:
+        if control.type in _TS_LOOP_TYPES:
             self.edges.append(
                 FlowEdge(
                     block_name,
                     block_name,
                     "guards",
-                    _json_ts_guard_metadata(stmt, self.source, branch="loop"),
+                    _json_ts_guard_metadata(control, self.source, branch="loop"),
                 )
             )
-            body = _ts_body_node(stmt)
+            incoming_defs = _copy_reaching_defs(self.reaching_defs)
+            body = _ts_body_node(control)
             body_exits = self._emit_statements(_ts_statement_children(body), [block_name])
+            body_defs = _copy_reaching_defs(self.reaching_defs)
             for body_exit in body_exits:
                 self.edges.append(FlowEdge(body_exit, block_name, "controls", None))
+            self.reaching_defs = _merge_reaching_defs(incoming_defs, body_defs)
             return [block_name]
         return [block_name]
 
     def _add_dataflow_edges(self, stmt, block_name: str) -> None:
-        stores = _ts_store_names(stmt, self.source)
-        loads = _ts_load_names(stmt, self.source, set(stores))
+        stores, loads = _ts_statement_store_load_names(stmt, self.source)
         for variable, use_line in sorted(loads.items()):
-            prior = self.last_defs.get(variable)
-            if prior is not None:
-                def_name, def_line = prior
+            prior_defs = self.reaching_defs.get(variable, [])
+            for def_name, def_line in prior_defs:
                 self.edges.append(
                     FlowEdge(
                         def_name,
@@ -481,7 +537,7 @@ class _TreeSitterFlowBuilder:
                     )
                 )
         for variable, def_line in sorted(stores.items()):
-            self.last_defs[variable] = (block_name, def_line)
+            self.reaching_defs[variable] = [(block_name, def_line)]
 
 
 def _ts_function_defs(root, file_path: str, source: bytes) -> list[tuple[object, str]]:
@@ -594,6 +650,29 @@ def _ts_parameter_names(node, source: bytes) -> list[str]:
     return [name for name in names if name]
 
 
+def _ts_statement_store_load_names(node, source: bytes) -> tuple[dict[str, int], dict[str, int]]:
+    control = _ts_control_node(node)
+    if control.type in _TS_IF_TYPES | _TS_LOOP_TYPES:
+        condition = _ts_condition_node(control)
+        loads = _ts_load_names(condition, source, set()) if condition is not None else {}
+        return {}, loads
+    if control.type in _TS_RETURN_TYPES:
+        return {}, _ts_load_names(node, source, set())
+    stores = _ts_store_names(node, source)
+    loads = _ts_load_names(node, source, set(stores))
+    return stores, loads
+
+
+def _ts_control_node(node):
+    if node.type in _TS_IF_TYPES | _TS_LOOP_TYPES | _TS_RETURN_TYPES:
+        return node
+    if node.type == "expression_statement":
+        for child in node.children:
+            if child.is_named and child.type in _TS_IF_TYPES | _TS_LOOP_TYPES | _TS_RETURN_TYPES:
+                return child
+    return node
+
+
 def _ts_store_names(node, source: bytes) -> dict[str, int]:
     stores: dict[str, int] = {}
 
@@ -675,6 +754,16 @@ def _json_ts_guard_metadata(node, source: bytes, *, branch: str) -> str:
 
 
 def _ts_condition_text(node, source: bytes) -> str:
+    condition = _ts_condition_node(node)
+    if condition is None:
+        return ""
+    text = _ts_text(condition, source).strip()
+    if text.startswith("(") and text.endswith(")"):
+        return text[1:-1].strip()
+    return text
+
+
+def _ts_condition_node(node):
     condition = node.child_by_field_name("condition")
     if condition is None:
         for child in node.children:
@@ -683,12 +772,7 @@ def _ts_condition_text(node, source: bytes) -> str:
             if child.type not in {"identifier", "type_identifier"}:
                 condition = child
                 break
-    if condition is None:
-        return ""
-    text = _ts_text(condition, source).strip()
-    if text.startswith("(") and text.endswith(")"):
-        return text[1:-1].strip()
-    return text
+    return condition
 
 
 def _json_guard_metadata(stmt: ast.If) -> str:

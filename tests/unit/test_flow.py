@@ -31,6 +31,34 @@ PY_SOURCE = (
 JS_SOURCE = (FLOW_HEAVY_DIR / "js_flow.js").read_text(encoding="utf-8")
 TS_SOURCE = (FLOW_HEAVY_DIR / "ts_flow.ts").read_text(encoding="utf-8")
 GO_SOURCE = (FLOW_HEAVY_DIR / "go_flow.go").read_text(encoding="utf-8")
+RUBY_SOURCE = (
+    "class Runner\n"
+    "  def run(flag)\n"
+    "    value = 0\n"
+    "    while flag\n"
+    "      value = 1\n"
+    "      break\n"
+    "    end\n"
+    "    value\n"
+    "  end\n"
+    "\n"
+    "  def self.build\n"
+    "    run(true)\n"
+    "  end\n"
+    "end\n"
+)
+RUST_SOURCE = (
+    "fn spin(limit: i32) -> i32 {\n"
+    "    let mut total = 0;\n"
+    "    while total < limit {\n"
+    "        total += 1;\n"
+    "    }\n"
+    "    for item in 0..limit {\n"
+    "        total += item;\n"
+    "    }\n"
+    "    total\n"
+    "}\n"
+)
 
 
 def _extract_fixture():
@@ -57,6 +85,28 @@ def test_dfg_reaches_use_with_variable_metadata():
     )
 
 
+def test_python_branch_sensitive_dfg_keeps_alternate_reaching_definitions():
+    source = (
+        "def choose(flag):\n"
+        "    x = 0\n"
+        "    if flag:\n"
+        "        x = 1\n"
+        "    return x\n"
+    )
+
+    nodes, edges = flow.extract_flow("python", "branch.py", source)
+    return_node = next(node for node in nodes if node.signature.strip() == "return x")
+    reaching_lines = {
+        json.loads(edge.metadata or "{}").get("definition_line")
+        for edge in edges
+        if edge.kind == "dataflow"
+        and edge.dst_name == return_node.name
+        and json.loads(edge.metadata or "{}").get("variable") == "x"
+    }
+
+    assert reaching_lines == {2, 4}
+
+
 @pytest.mark.parametrize(
     ("language", "filename", "source"),
     [
@@ -71,6 +121,28 @@ def test_tier_a_flow_extractors_do_not_fail_and_emit_blocks(language, filename, 
 
     assert nodes
     assert any(edge.kind == "controls" for edge in edges)
+
+
+def test_ruby_flow_extracts_instance_and_singleton_methods():
+    nodes, edges = flow.extract_flow("ruby", "flow.rb", RUBY_SOURCE)
+
+    parent_symbols = {node.parent_symbol for node in nodes}
+    assert "flow.rb::Runner::run" in parent_symbols
+    assert "flow.rb::Runner::build" in parent_symbols
+    assert any(edge.kind == "controls" for edge in edges)
+
+
+def test_rust_flow_extracts_common_loop_guards():
+    _, edges = flow.extract_flow("rust", "flow.rs", RUST_SOURCE)
+
+    loop_guards = [
+        json.loads(edge.metadata or "{}")
+        for edge in edges
+        if edge.kind == "guards" and json.loads(edge.metadata or "{}").get("branch") == "loop"
+    ]
+    predicates = json.dumps(loop_guards)
+    assert "total < limit" in predicates
+    assert "0..limit" in predicates
 
 
 def test_extract_python_flow_emits_function_statement_blocks_and_controls():

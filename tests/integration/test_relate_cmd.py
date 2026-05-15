@@ -375,6 +375,67 @@ def test_flow_relate_verbs_return_indexed_flow_json(
         )
 
 
+def test_flow_relate_verbs_return_semantic_paths_and_slices(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    repo = _index_source_tree(
+        monkeypatch,
+        tmp_path,
+        capsys,
+        "branch-flow",
+        {
+            "branch.py": (
+                "def choose(flag):\n"
+                "    x = 0\n"
+                "    if flag:\n"
+                "        x = 1\n"
+                "    return x\n"
+            )
+        },
+    )
+
+    rc, paths_blob, _ = _run(
+        _ns(repo, "paths-through", "choose", target="2:5", hops=6),
+        capsys,
+    )
+    assert rc == 0
+    assert paths_blob["warnings"] == []
+    assert any(
+        result["path"][0] == "entry"
+        and result["path"][-1] == "exit"
+        and len(result["path"]) >= 4
+        and "flag" in result["guards"]
+        for result in paths_blob["results"]
+    )
+
+    rc, reaching_blob, _ = _run(_ns(repo, "reaching-definitions", "x@5"), capsys)
+    assert rc == 0
+    reaching_lines = {
+        result["metadata"].get("definition_line")
+        for result in reaching_blob["results"]
+        if result["edge_kind"] == "dataflow"
+    }
+    assert reaching_lines == {2, 4}
+    assert all(len(result["path"]) >= 2 for result in reaching_blob["results"])
+
+    rc, uses_blob, _ = _run(_ns(repo, "reachable-uses", "x@2"), capsys)
+    assert rc == 0
+    assert any(
+        result["metadata"].get("use_line") == 5
+        and result["path"][-1].startswith("block_")
+        for result in uses_blob["results"]
+    )
+
+    rc, conditions_blob, _ = _run(_ns(repo, "conditions-for", "x@5"), capsys)
+    assert rc == 0
+    assert any(
+        "flag" in result["guards"] and "x" in result["variables"]
+        for result in conditions_blob["results"]
+    )
+
+
 def test_flow_dataflow_metadata_aggregates_duplicate_logical_edges(
     monkeypatch,
     tmp_path,
@@ -419,6 +480,68 @@ def test_flow_dataflow_metadata_aggregates_duplicate_logical_edges(
     rc, right_blob, _ = _run(_ns(repo, "reaching-definitions", "right"), capsys)
     assert rc == 0
     assert any("right" in json.dumps(result["metadata"]) for result in right_blob["results"])
+
+
+def test_vectorize_warns_when_flow_extraction_returns_no_blocks_for_supported_function(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    source_dir = tmp_path / "flow-warning"
+    source_dir.mkdir()
+    (source_dir / "broken.py").write_text(
+        "def broken():\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+
+    real_extract_flow = vec_cmd.flow.extract_flow
+
+    def empty_flow(language, file_path, source):
+        if file_path == "broken.py":
+            return [], []
+        return real_extract_flow(language, file_path, source)
+
+    monkeypatch.setattr(vec_cmd.flow, "extract_flow", empty_flow)
+
+    ns = argparse.Namespace(
+        source=str(source_dir),
+        output_dir=None,
+        max_file_mb=1.5,
+        no_cache=True,
+        update=False,
+    )
+    rc = vec_cmd.run(ns)
+    summary = json.loads([line for line in capsys.readouterr().out.splitlines() if line.strip()][-1])
+
+    conn = db.open_db(paths.repo_dir("flow-warning") / "index.sqlite")
+    try:
+        file_rows = conn.execute(
+            "SELECT kind, name FROM nodes WHERE name = 'broken.py'"
+        ).fetchall()
+        function_rows = conn.execute(
+            "SELECT kind, name FROM nodes WHERE name = 'broken.py::broken'"
+        ).fetchall()
+        block_rows = conn.execute(
+            "SELECT name FROM nodes WHERE kind = 'block' AND file_path = 'broken.py'"
+        ).fetchall()
+        orphan_blocks = conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE kind = 'block' AND parent_id IS NULL"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert rc == 0
+    assert any(
+        warning.startswith("flow extraction produced no blocks for broken.py")
+        for warning in summary["warnings"]
+    )
+    assert file_rows == [("file", "broken.py")]
+    assert function_rows == [("function", "broken.py::broken")]
+    assert block_rows == []
+    assert orphan_blocks == 0
 
 
 def test_flow_blocks_parent_to_method_and_nested_function_symbols(

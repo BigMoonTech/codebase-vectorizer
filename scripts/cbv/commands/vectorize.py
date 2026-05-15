@@ -625,6 +625,14 @@ def _write_flow_graph(
         except Exception as e:
             warnings.append(f"flow extraction failed for {rel_file_path}: {e}")
             continue
+        if (
+            parser.language_for_name(language) is not None
+            and not flow_nodes
+            and _file_has_indexed_functions(rel_file_path, function_ids)
+        ):
+            warnings.append(
+                f"flow extraction produced no blocks for {rel_file_path}"
+            )
 
         flow_node_ids: dict[str, int] = {}
         file_chunks = chunks_by_file.get(rel_file_path, [])
@@ -677,6 +685,14 @@ def _write_flow_graph(
         "SELECT COUNT(*) FROM edges WHERE kind IN ('controls', 'dataflow', 'guards')"
     ).fetchone()[0]
     return int(nodes_block), int(edges_flow)
+
+
+def _file_has_indexed_functions(
+    rel_file_path: str,
+    function_ids: dict[str, int],
+) -> bool:
+    prefix = f"{rel_file_path}::"
+    return any(symbol.startswith(prefix) for symbol in function_ids)
 
 
 def _aggregate_flow_metadata(metadata_values: list[str | None]) -> str | None:
