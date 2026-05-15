@@ -69,6 +69,13 @@ def test_symbol_graph_is_populated(indexed):
 
     assert nodes_symbol > 0
     assert edges_symbol > 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind IN ('file','class','function','method')"
+    ).fetchone()[0] > 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind IN ('contains','calls','imports','references')"
+    ).fetchone()[0] > 0
+    assert conn.execute("SELECT COUNT(*) FROM edges WHERE kind='calls'").fetchone()[0] > 0
     assert int(db.read_meta(conn, "total_nodes_symbol")) == nodes_symbol
     assert int(db.read_meta(conn, "total_edges_symbol")) == edges_symbol
 

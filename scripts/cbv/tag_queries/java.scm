@@ -1,0 +1,9 @@
+(class_declaration) @definition.class
+(interface_declaration) @definition.class
+(enum_declaration) @definition.class
+(record_declaration) @definition.class
+(method_declaration) @definition.method
+(constructor_declaration) @definition.method
+
+(import_declaration) @reference.import
+(method_invocation) @reference.call
