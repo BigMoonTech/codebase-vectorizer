@@ -116,6 +116,10 @@ def _extract_fixture():
     return flow.extract_python_flow("flow_app.py", FIXTURE.read_text(encoding="utf-8"))
 
 
+def _node_with_exact_signature(nodes, signature):
+    return next(node for node in nodes if node.signature.strip() == signature)
+
+
 def test_cfg_emits_true_false_loop_and_exit_blocks():
     nodes, edges = flow.extract_flow("python", "flow.py", PY_SOURCE)
 
@@ -156,6 +160,193 @@ def test_python_branch_sensitive_dfg_keeps_alternate_reaching_definitions():
     }
 
     assert reaching_lines == {2, 4}
+
+
+def test_python_loop_break_does_not_flow_to_later_body_statement():
+    source = (
+        "def walk(items):\n"
+        "    total = 0\n"
+        "    for item in items:\n"
+        "        if item.stop:\n"
+        "            break\n"
+        "        total += item.value\n"
+        "    return total\n"
+    )
+
+    nodes, edges = flow.extract_flow("python", "loop.py", source)
+    break_node = _node_with_exact_signature(nodes, "break")
+    after_break = _node_with_exact_signature(nodes, "total += item.value")
+    return_node = _node_with_exact_signature(nodes, "return total")
+
+    assert not any(
+        edge.kind == "controls"
+        and edge.src_name == break_node.name
+        and edge.dst_name == after_break.name
+        for edge in edges
+    )
+    assert any(
+        edge.kind == "controls"
+        and edge.src_name == break_node.name
+        and edge.dst_name == return_node.name
+        for edge in edges
+    )
+
+
+def test_python_loop_continue_flows_to_loop_header_not_later_body_statement():
+    source = (
+        "def walk(items):\n"
+        "    total = 0\n"
+        "    for item in items:\n"
+        "        if item.skip:\n"
+        "            continue\n"
+        "        total += item.value\n"
+        "    return total\n"
+    )
+
+    nodes, edges = flow.extract_flow("python", "loop.py", source)
+    continue_node = _node_with_exact_signature(nodes, "continue")
+    after_continue = _node_with_exact_signature(nodes, "total += item.value")
+    loop_node = next(node for node in nodes if node.signature.strip().startswith("for item in items"))
+
+    assert not any(
+        edge.kind == "controls"
+        and edge.src_name == continue_node.name
+        and edge.dst_name == after_continue.name
+        for edge in edges
+    )
+    assert any(
+        edge.kind == "controls"
+        and edge.src_name == continue_node.name
+        and edge.dst_name == loop_node.name
+        for edge in edges
+    )
+
+
+def test_python_entry_dataflow_seeds_all_argument_forms():
+    source = (
+        "def collect(pos, /, normal, *items, named, **extras):\n"
+        "    return pos, normal, items, named, extras\n"
+    )
+
+    nodes, edges = flow.extract_flow("python", "args.py", source)
+    return_node = _node_with_exact_signature(
+        nodes,
+        "return pos, normal, items, named, extras",
+    )
+    variables = {
+        json.loads(edge.metadata or "{}").get("variable")
+        for edge in edges
+        if edge.kind == "dataflow"
+        and edge.src_name == "args.py::collect#entry"
+        and edge.dst_name == return_node.name
+    }
+
+    assert variables == {"pos", "normal", "items", "named", "extras"}
+
+
+def test_python_augassign_reads_previous_target_definition_and_redefines():
+    source = (
+        "def bump(seed):\n"
+        "    x = seed\n"
+        "    x += 1\n"
+        "    return x\n"
+    )
+
+    nodes, edges = flow.extract_flow("python", "aug.py", source)
+    aug_node = _node_with_exact_signature(nodes, "x += 1")
+    return_node = _node_with_exact_signature(nodes, "return x")
+    payloads = [
+        (edge.src_name, edge.dst_name, json.loads(edge.metadata or "{}"))
+        for edge in edges
+        if edge.kind == "dataflow"
+    ]
+
+    assert any(
+        dst == aug_node.name
+        and payload.get("variable") == "x"
+        and payload.get("definition_line") == 2
+        and payload.get("use_line") == 3
+        for _, dst, payload in payloads
+    )
+    assert any(
+        src == aug_node.name
+        and dst == return_node.name
+        and payload.get("variable") == "x"
+        and payload.get("definition_line") == 3
+        and payload.get("use_line") == 4
+        for src, dst, payload in payloads
+    )
+
+
+def test_tree_sitter_loop_control_and_augassign_edges_for_javascript():
+    source = (
+        "function walk(items, seed) {\n"
+        "  let total = seed;\n"
+        "  for (const item of items) {\n"
+        "    if (item.skip) {\n"
+        "      continue;\n"
+        "    }\n"
+        "    total += item.value;\n"
+        "    if (item.stop) {\n"
+        "      break;\n"
+        "    }\n"
+        "    total += 10;\n"
+        "  }\n"
+        "  return total;\n"
+        "}\n"
+    )
+
+    nodes, edges = flow.extract_flow("javascript", "loop.js", source)
+    continue_node = _node_with_exact_signature(nodes, "continue;")
+    break_node = _node_with_exact_signature(nodes, "break;")
+    after_continue = _node_with_exact_signature(nodes, "total += item.value;")
+    after_break = _node_with_exact_signature(nodes, "total += 10;")
+    loop_node = next(node for node in nodes if node.signature.strip().startswith("for "))
+    return_node = _node_with_exact_signature(nodes, "return total;")
+    dataflow_payloads = [
+        (edge.src_name, edge.dst_name, json.loads(edge.metadata or "{}"))
+        for edge in edges
+        if edge.kind == "dataflow"
+    ]
+
+    assert not any(
+        edge.kind == "controls"
+        and edge.src_name == continue_node.name
+        and edge.dst_name == after_continue.name
+        for edge in edges
+    )
+    assert any(
+        edge.kind == "controls"
+        and edge.src_name == continue_node.name
+        and edge.dst_name == loop_node.name
+        for edge in edges
+    )
+    assert not any(
+        edge.kind == "controls"
+        and edge.src_name == break_node.name
+        and edge.dst_name == after_break.name
+        for edge in edges
+    )
+    assert any(
+        edge.kind == "controls"
+        and edge.src_name == break_node.name
+        and edge.dst_name == return_node.name
+        for edge in edges
+    )
+    assert any(
+        dst == after_continue.name
+        and payload.get("variable") == "total"
+        and payload.get("definition_line") == 2
+        and payload.get("use_line") == 7
+        for _, dst, payload in dataflow_payloads
+    )
+    assert any(
+        src == after_continue.name
+        and payload.get("variable") == "total"
+        and payload.get("definition_line") == 7
+        and payload.get("use_line") == 13
+        for src, _, payload in dataflow_payloads
+    )
 
 
 @pytest.mark.parametrize(

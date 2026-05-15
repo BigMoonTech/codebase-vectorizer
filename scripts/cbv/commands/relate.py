@@ -581,16 +581,17 @@ def _flow_edges_matching_metadata(
         f"JOIN nodes src ON src.id = edge.src "
         f"JOIN nodes dst ON dst.id = edge.dst "
         f"WHERE edge.kind IN ({placeholders}) AND edge.metadata LIKE ? "
-        f"ORDER BY COALESCE(src.start_line, 0), COALESCE(dst.start_line, 0), edge.kind "
-        f"LIMIT ?",
-        (*kinds, f"%{query}%", top_k * 4),
+        f"ORDER BY COALESCE(src.start_line, 0), COALESCE(dst.start_line, 0), edge.kind ",
+        (*kinds, f"%{query}%"),
     ).fetchall()
-    results = [
-        _flow_edge_result(conn, row, node_ids=set(), incoming=None)
-        for row in rows
-        if _metadata_matches_query(row[4], query)
-    ]
-    return results[:top_k]
+    results = []
+    for row in rows:
+        if not _metadata_matches_query(row[4], query):
+            continue
+        results.append(_flow_edge_result(conn, row, node_ids=set(), incoming=None))
+        if len(results) >= top_k:
+            break
+    return results
 
 
 def _conditions_for_metadata(
@@ -610,26 +611,6 @@ def _conditions_for_metadata(
     return _conditions_for_rows(conn, query, rows, top_k=top_k, hops=hops)
 
 
-def _flow_edges_for_functions(
-    conn,
-    function_ids: set[int],
-    *,
-    kinds: tuple[str, ...],
-    top_k: int,
-) -> list[dict[str, Any]]:
-    if not function_ids:
-        return []
-    placeholders = ",".join("?" for _ in function_ids)
-    node_ids = [
-        int(row[0])
-        for row in conn.execute(
-            f"SELECT id FROM nodes WHERE kind = 'block' AND parent_id IN ({placeholders})",
-            tuple(function_ids),
-        ).fetchall()
-    ]
-    return _flow_edges(conn, node_ids, incoming=None, kinds=kinds, top_k=top_k)
-
-
 def _matching_dataflow_rows(
     conn,
     variable: str,
@@ -644,9 +625,8 @@ def _matching_dataflow_rows(
         "JOIN nodes src ON src.id = edge.src "
         "JOIN nodes dst ON dst.id = edge.dst "
         "WHERE edge.kind = 'dataflow' AND edge.metadata LIKE ? "
-        "ORDER BY COALESCE(src.start_line, 0), COALESCE(dst.start_line, 0) "
-        "LIMIT ?",
-        (f"%{variable}%", top_k),
+        "ORDER BY COALESCE(src.start_line, 0), COALESCE(dst.start_line, 0) ",
+        (f"%{variable}%",),
     ).fetchall()
     matched = []
     for row in rows:
@@ -657,6 +637,8 @@ def _matching_dataflow_rows(
             if line is not None and item.get(line_kind) != line:
                 continue
             matched.append(row)
+            if len(matched) >= top_k:
+                return matched
             break
     return matched
 
@@ -1086,7 +1068,7 @@ def _metadata_matches_query(raw: str | None, query: str) -> bool:
         metadata,
         query,
         keys={"variable", "var", "variables", "vars", "predicate"},
-    ) or query in raw
+    )
 
 
 def _metadata_contains_query(value: Any, query: str, *, keys: set[str]) -> bool:

@@ -525,6 +525,129 @@ def test_flow_dataflow_metadata_aggregates_duplicate_logical_edges(
     assert any("right" in json.dumps(result["metadata"]) for result in right_blob["results"])
 
 
+def test_flow_metadata_exact_match_is_not_lost_after_substring_prefilter_limit(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    repo_dir = paths.repo_dir("metadata-limit")
+    conn = db.open_db(repo_dir / "index.sqlite")
+    db.init_schema(conn)
+    db.write_meta(conn, "schema_version", db.SCHEMA_VERSION)
+    with conn:
+        conn.execute(
+            "INSERT INTO nodes "
+            "(id, kind, name, short_name, file_path, start_line, end_line) "
+            "VALUES (1, 'function', 'pkg/flow.py::choose', 'choose', 'pkg/flow.py', 1, 120)"
+        )
+        node_rows = []
+        edge_rows = []
+        next_id = 2
+        for idx in range(8):
+            src_id = next_id
+            dst_id = next_id + 1
+            next_id += 2
+            start_line = 2 + (idx * 2)
+            node_rows.extend(
+                [
+                    (
+                        src_id,
+                        "block",
+                        f"pkg/flow.py::choose#decoy_src_{idx}",
+                        f"decoy_src_{idx}",
+                        "pkg/flow.py",
+                        start_line,
+                        start_line,
+                        1,
+                    ),
+                    (
+                        dst_id,
+                        "block",
+                        f"pkg/flow.py::choose#decoy_dst_{idx}",
+                        f"decoy_dst_{idx}",
+                        "pkg/flow.py",
+                        start_line + 1,
+                        start_line + 1,
+                        1,
+                    ),
+                ]
+            )
+            edge_rows.append(
+                (
+                    src_id,
+                    dst_id,
+                    "dataflow",
+                    0.7,
+                    json.dumps(
+                        {
+                            "variable": f"x_decoy_{idx}",
+                            "definition_line": start_line,
+                            "use_line": start_line + 1,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+        node_rows.extend(
+            [
+                (
+                    next_id,
+                    "block",
+                    "pkg/flow.py::choose#exact_src",
+                    "exact_src",
+                    "pkg/flow.py",
+                    100,
+                    100,
+                    1,
+                ),
+                (
+                    next_id + 1,
+                    "block",
+                    "pkg/flow.py::choose#exact_dst",
+                    "exact_dst",
+                    "pkg/flow.py",
+                    101,
+                    101,
+                    1,
+                ),
+            ]
+        )
+        edge_rows.append(
+            (
+                next_id,
+                next_id + 1,
+                "dataflow",
+                0.7,
+                json.dumps(
+                    {
+                        "variable": "x",
+                        "definition_line": 100,
+                        "use_line": 101,
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+        conn.executemany(
+            "INSERT INTO nodes "
+            "(id, kind, name, short_name, file_path, start_line, end_line, parent_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            node_rows,
+        )
+        conn.executemany(
+            "INSERT INTO edges (src, dst, kind, weight, metadata) VALUES (?, ?, ?, ?, ?)",
+            edge_rows,
+        )
+    conn.close()
+
+    for verb in ("reaching-definitions", "conditions-for"):
+        rc, blob, _ = _run(_ns("metadata-limit", verb, "x", top_k=1, hops=4), capsys)
+
+        assert rc == 0
+        assert [result["metadata"].get("variable") for result in blob["results"]] == ["x"]
+
+
 def test_vectorize_warns_when_flow_extraction_returns_no_blocks_for_supported_function(
     monkeypatch,
     tmp_path,
