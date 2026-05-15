@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation commit: `a50b4fe slice 3 t3: stabilize graph expansion ordering`
+- Latest confirmed implementation commit: `73f735e slice 4 t2: harden relate graph queries`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -25,6 +25,17 @@
   - `18b5c5a docs: record task 3 review blockers`
   - `b75c61a slice 3 t3: harden query lanes`
   - `a50b4fe slice 3 t3: stabilize graph expansion ordering`
+  - `cbedecb docs: mark task 3 complete`
+  - `8b6c904 docs: mark task 4 checkpoint complete`
+  - `805306d slice 4 t1: compute pagerank and expose stats`
+  - `341393e slice 4 t1: address pagerank stats review`
+  - `5a2ec8d docs: mark task 5 complete`
+  - `d5be529 slice 4 t1a: add personalized pagerank to full lane`
+  - `9159a5a slice 4 t1a: align ppr with expansion set`
+  - `6555c04 slice 4 t1a: bound ppr fallback candidates`
+  - `5fd9796 docs: mark task 5a complete`
+  - `19130f7 slice 4 t2: add codebase-relate graph queries`
+  - `73f735e slice 4 t2: harden relate graph queries`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -33,7 +44,7 @@
 
 ## Current Working State
 
-This handoff was updated after Task 3 approval:
+This handoff was updated after Task 6 approval:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
@@ -42,6 +53,7 @@ This handoff was updated after Task 3 approval:
 - Task 4 checkpoint verification passed and is marked complete in the final completion plan.
 - Task 5 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 5A is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 6 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -85,11 +97,23 @@ This handoff was updated after Task 3 approval:
   - Full-lane result tags now require and surface `ppr`.
   - The local no-SciPy weighted PageRank fallback preserves personalized dangling behavior and returns last non-uniform scores on iteration limit.
   - PPR convergence fallback respects `candidate_chunk_ids`.
+- Task 6 landed across:
+  - `19130f7 slice 4 t2: add codebase-relate graph queries`
+  - `73f735e slice 4 t2: harden relate graph queries`
+- Task 6 review fixes include:
+  - `relate`, `graph`, and `flow` are wired through CLI, bootstrap dispatch, and run scripts.
+  - Every spec-listed relate verb returns the common JSON shape: `repo`, `verb`, `query`, `results`, `warnings`.
+  - Direct `argparse.Namespace` callers work with both plan-style `verb`/`args` and parser-style `relate_verb`/`query`/`target`.
+  - Flow verbs return clean `flow not indexed` fallback JSON until Task 10 supplies real CFG/DFG edges.
+  - `flow <repo> <function>` expands a function symbol to child block nodes when flow edges exist.
+  - `concept-cluster` returns clean `clusters not indexed` fallback JSON until Task 11, and returns ranked member chunks when clusters exist.
+  - `inheritance-chain` dedupes results and guards recursive CTE walks against cycles.
+  - `skills/codebase-relate/SKILL.md` documents the relationship-query workflow for indexed repos.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Milestone 2 Task 6: `relate`, `graph`, `flow`, and the `codebase-relate` skill.
+- Next action is Milestone 3 Task 7: reranking, confidence, and refined queries.
 
 ## Verified Baseline
 
@@ -126,6 +150,13 @@ Latest verification in the current session:
   - vectorized `tests/fixtures/simple-python`;
   - full-lane query returned `pipeline_used: full`, `expansion_size: 9`, and `ppr` in result source tags.
 - Task 5A targeted spec re-review approved with no findings; code-quality re-review had one minor fallback-candidate issue fixed in `6555c04`.
+- Task 6 focused verification: `36 passed`.
+- Task 6 full-suite regression: `331 passed, 1 skipped`.
+- Task 6 prepared-venv smoke passed:
+  - vectorized `tests/fixtures/simple-python`;
+  - `relate callers`, `graph` alias, and `flow` alias all executed;
+  - `flow` returned clean `flow not indexed` fallback JSON before real CFG/DFG extraction exists.
+- Task 6 targeted spec re-review and code-quality re-review approved with no findings.
 
 ## What Exists Today
 
@@ -157,6 +188,8 @@ Current Slice 3/Milestone 1 work adds:
 - Global PageRank computation over symbol nodes during vectorize.
 - `stats` command with counts, cluster label details, and top PageRank nodes.
 - Query-time Personalized PageRank in the full lane, seeded from the post-expansion bounded set.
+- `relate` command, plus `graph` and `flow` aliases, for graph/relationship queries over indexed repos.
+- `codebase-relate` skill documenting caller/callee, neighborhood, path, concept, PageRank, and flow query usage.
 
 Important implementation detail:
 
@@ -173,14 +206,13 @@ The spec is authoritative over all plans. The final completion plan has been rev
 Spec-required surfaces still to implement:
 
 1. Cross-encoder reranking and refined-query hints.
-2. `codebase-relate`, plus `graph` and `flow` CLI aliases.
-3. Content-hash embedding cache.
-4. Merkle incremental indexing.
-5. Intra-procedural CFG/DFG flow edges and flow relate verbs.
-6. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
-7. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
-8. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
-9. README and skill docs aligned to final behavior.
+2. Content-hash embedding cache.
+3. Merkle incremental indexing.
+4. Intra-procedural CFG/DFG flow edges and useful flow relate results beyond fallback.
+5. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
+6. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
+7. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
+8. README and skill docs aligned to final behavior.
 
 ## Completion Tracking Rule
 
@@ -206,9 +238,9 @@ User requested:
 
 Recommended next action:
 
-1. Begin Milestone 2 Task 6: `relate`, `graph`, `flow`, and the `codebase-relate` skill.
-2. After Task 6 implementation, verification, and review pass, mark Task 6 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
-3. Continue with Milestone 3 Task 7 for reranking, confidence, and refined queries.
+1. Begin Milestone 3 Task 7 for reranking, confidence, and refined queries.
+2. After Task 7 implementation, verification, and review pass, mark Task 7 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Continue with cache and incremental indexing work.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.

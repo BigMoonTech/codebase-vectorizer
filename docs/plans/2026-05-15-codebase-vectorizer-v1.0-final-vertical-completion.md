@@ -1071,7 +1071,7 @@ git commit -m "slice 4 t1a: add personalized pagerank to full lane"
 - Create: `skills/codebase-relate/SKILL.md`
 - Create: `tests/integration/test_relate_cmd.py`
 
-- [ ] **Step 1: Add CLI surface**
+- [x] **Step 1: Add CLI surface**
 
 Add parser:
 
@@ -1111,7 +1111,7 @@ pf.add_argument("--top-k", type=int, default=20)
 
 `graph` delegates to `relate neighbors`; `flow` delegates to `relate paths-through`.
 
-- [ ] **Step 2: Implement relate**
+- [x] **Step 2: Implement relate**
 
 Create `scripts/cbv/commands/relate.py`:
 
@@ -1199,7 +1199,7 @@ def _format(rows):
     ]
 ```
 
-- [ ] **Step 2A: Complete every spec-listed relate verb**
+- [x] **Step 2A: Complete every spec-listed relate verb**
 
 Before this task is complete, `relate.py` must implement all verbs listed in the CLI parser, not only caller/callee neighbors:
 
@@ -1219,7 +1219,7 @@ Implementation requirements:
 - `paths-through`, `reaching-definitions`, `reachable-uses`, and `conditions-for` query block nodes and `controls`/`dataflow`/`guards` edges; before Task 10 lands they return a clean "flow not indexed" JSON result rather than an error.
 - Every verb returns the same top-level JSON keys: `repo`, `verb`, `query`, `results`, `warnings`.
 
-- [ ] **Step 3: Add skill**
+- [x] **Step 3: Add skill**
 
 Create `skills/codebase-relate/SKILL.md`:
 
@@ -1249,7 +1249,7 @@ Supported verbs:
 Read returned file ranges before answering. If no repo is indexed, ask the user to run `vectorize-repo` first.
 ```
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run:
 
