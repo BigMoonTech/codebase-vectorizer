@@ -783,7 +783,7 @@ git commit -m "slice 3 t3: add query lanes and graph expansion"
 
 **Completion tracking directive:** After this checkpoint passes, edit this plan to mark all safely completed Milestone 1 tasks and checkpoint steps complete before starting Milestone 2.
 
-- [ ] **Step 1: Run full suite**
+- [x] **Step 1: Run full suite**
 
 ```powershell
 & "$env:LOCALAPPDATA\codebase-vectorizer\python-env\Scripts\python.exe" -m pytest tests/ -v
@@ -791,7 +791,7 @@ git commit -m "slice 3 t3: add query lanes and graph expansion"
 
 Expected: all tests pass, one network clone test may remain skipped.
 
-- [ ] **Step 2: Run smoke**
+- [x] **Step 2: Run smoke**
 
 ```powershell
 $ErrorActionPreference='Stop'
@@ -807,7 +807,7 @@ Remove-Item -Recurse -Force $env:CODEBASE_VECTORIZER_HOME -ErrorAction SilentlyC
 
 Expected: vectorize summary has `nodes_symbol > 0`, `edges_symbol > 0`; first query reports `pipeline_used: fast`; second reports `pipeline_used: full`.
 
-- [ ] **Step 3: Commit only if files changed during fixes**
+- [x] **Step 3: Commit only if files changed during fixes**
 
 ```bash
 git status --short

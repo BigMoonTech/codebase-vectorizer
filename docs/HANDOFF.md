@@ -39,6 +39,7 @@ This handoff was updated after Task 3 approval:
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 3 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 4 checkpoint verification passed and is marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -67,7 +68,7 @@ This handoff was updated after Task 3 approval:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Task 4 checkpoint verification before beginning Milestone 2.
+- Next action is Milestone 2 Task 5: PageRank helper and `stats`.
 
 ## Verified Baseline
 
@@ -87,6 +88,11 @@ Latest verification in the current session:
 - Task 2A focused verification: `46 passed`.
 - Task 3 focused verification after final ordering fix: `19 passed`.
 - Task 3 targeted code-quality re-review approved with no findings.
+- Task 4 full suite: `286 passed, 1 skipped`.
+- Task 4 smoke passed:
+  - vectorize summary had `nodes_symbol: 31` and `edges_symbol: 34`;
+  - fast query reported `pipeline_used: fast`;
+  - full query reported `pipeline_used: full` and `expansion_size: 9`.
 
 ## What Exists Today
 
@@ -165,9 +171,9 @@ User requested:
 
 Recommended next action:
 
-1. Run Task 4 checkpoint verification before beginning Milestone 2.
-2. If Task 4 passes, mark Task 4 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md` and commit the checklist update.
-3. Begin Milestone 2 Task 5: PageRank helper and `stats`.
+1. Begin Milestone 2 Task 5: PageRank helper and `stats`.
+2. After Task 5 implementation, verification, and review pass, mark Task 5 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Continue with Task 5A for query-time Personalized PageRank before calling the full lane spec-complete.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.
