@@ -12,10 +12,11 @@ def open_cache(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS embedding_cache ("
-        "content_hash TEXT PRIMARY KEY, "
+        "content_hash TEXT NOT NULL, "
         "embedding BLOB NOT NULL, "
         "model_id TEXT NOT NULL, "
-        "created_at INTEGER NOT NULL)"
+        "created_at INTEGER NOT NULL, "
+        "PRIMARY KEY (content_hash, model_id))"
     )
     return conn
 
@@ -43,7 +44,7 @@ def put(
     conn.execute(
         "INSERT INTO embedding_cache (content_hash, embedding, model_id, created_at) "
         "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(content_hash) DO UPDATE SET embedding = excluded.embedding, "
-        "model_id = excluded.model_id, created_at = excluded.created_at",
+        "ON CONFLICT(content_hash, model_id) DO UPDATE SET "
+        "embedding = excluded.embedding, created_at = excluded.created_at",
         (content_hash, embedding.astype("int8").tobytes(), model_id, int(time.time())),
     )

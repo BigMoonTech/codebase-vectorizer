@@ -45,27 +45,40 @@ def test_put_and_get_round_trip_int8_embedding(tmp_path):
     np.testing.assert_array_equal(cached, embedding)
 
 
-def test_get_returns_none_for_different_model(tmp_path):
+def test_same_content_hash_can_store_separate_model_embeddings(tmp_path):
     conn = cache.open_cache(tmp_path / "embedding_cache.sqlite")
+    model_a_embedding = np.array([1, 2, 3], dtype=np.int8)
+    model_b_embedding = np.array([4, 5, 6], dtype=np.int8)
+
     try:
-        cache.put(conn, "hash-a", "model-a", np.array([1, 2, 3], dtype=np.int8))
+        cache.put(conn, "hash-a", "model-a", model_a_embedding)
+        cache.put(conn, "hash-a", "model-b", model_b_embedding)
         conn.commit()
 
-        assert cache.get(conn, "hash-a", "model-b") is None
+        np.testing.assert_array_equal(
+            cache.get(conn, "hash-a", "model-a"),
+            model_a_embedding,
+        )
+        np.testing.assert_array_equal(
+            cache.get(conn, "hash-a", "model-b"),
+            model_b_embedding,
+        )
+        rows = conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0]
     finally:
         conn.close()
 
+    assert rows == 2
 
-def test_put_updates_existing_content_hash(tmp_path):
+
+def test_put_updates_existing_content_hash_and_model(tmp_path):
     conn = cache.open_cache(tmp_path / "embedding_cache.sqlite")
     try:
         cache.put(conn, "hash-a", "model-a", np.array([1, 2, 3], dtype=np.int8))
-        cache.put(conn, "hash-a", "model-b", np.array([4, 5, 6], dtype=np.int8))
+        cache.put(conn, "hash-a", "model-a", np.array([4, 5, 6], dtype=np.int8))
         conn.commit()
 
-        assert cache.get(conn, "hash-a", "model-a") is None
         np.testing.assert_array_equal(
-            cache.get(conn, "hash-a", "model-b"),
+            cache.get(conn, "hash-a", "model-a"),
             np.array([4, 5, 6], dtype=np.int8),
         )
         rows = conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0]
