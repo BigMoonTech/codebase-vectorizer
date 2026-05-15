@@ -72,13 +72,8 @@ def run(ns: argparse.Namespace) -> int:
     conn = db.open_db(db_path)
     try:
         db.init_schema(conn)
-
-        if incremental_mode and _needs_fresh_rebuild(conn):
-            conn.close()
-            db_path.unlink()
-            conn = db.open_db(db_path)
-            db.init_schema(conn)
-            incremental_mode = False
+        if incremental_mode:
+            db.assert_schema_v1(conn)
 
         # Step 3: walk and plan delta.
         entries = list(walker.walk(src_dir, max_file_mb=ns.max_file_mb))
@@ -95,10 +90,18 @@ def run(ns: argparse.Namespace) -> int:
 
         paths_to_chunk = set(current_shas)
         if incremental_mode:
+            missing_prior_merkle = _missing_prior_merkle(conn)
             delta = incremental.plan_delta(conn, current_shas)
-            paths_to_chunk = delta.added | delta.modified
+            paths_to_chunk = (
+                set(current_shas)
+                if missing_prior_merkle
+                else delta.added | delta.modified
+            )
             _clear_symbol_graph(conn)
-            _delete_file_chunks(conn, delta.removed | delta.modified)
+            delete_paths = delta.removed | delta.modified
+            if missing_prior_merkle:
+                delete_paths |= _indexed_file_paths(conn)
+            _delete_file_chunks(conn, delete_paths)
 
         # Step 4: chunk only files that need writes.
         chunks_buf: list[chunker.Chunk] = []
@@ -129,9 +132,15 @@ def run(ns: argparse.Namespace) -> int:
         embedding_cache_hit_rate = 0.0
         quantized_embeddings = []
         if not chunks_buf:
-            emb = embedder.StubEmbedder()
+            embedder_model, embedder_dim, embedder_quant = _metadata_for_empty_update(
+                conn,
+                incremental_mode,
+            )
         else:
             emb = embedder.make_embedder()
+            embedder_model = emb.model_id
+            embedder_dim = str(emb.dim)
+            embedder_quant = "int8"
             print(f"[vectorize] embedder: {emb.model_id}", flush=True)
             cache_conn = None
             if not getattr(ns, "no_cache", False):
@@ -223,7 +232,9 @@ def run(ns: argparse.Namespace) -> int:
             repo_name,
             spec,
             commit_sha,
-            emb,
+            embedder_model,
+            embedder_dim,
+            embedder_quant,
             len(all_chunks),
             nodes_symbol,
             edges_symbol,
@@ -270,14 +281,28 @@ def _embed_in_batches(emb: embedder.Embedder, texts: List[str], batch: int):
     return np.concatenate(rows, axis=0)
 
 
-def _needs_fresh_rebuild(conn) -> bool:
-    try:
-        db.assert_schema_v1(conn)
-        merkle_count = conn.execute("SELECT COUNT(*) FROM merkle_files").fetchone()[0]
-        chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-    except Exception:
-        return True
+def _missing_prior_merkle(conn) -> bool:
+    merkle_count = conn.execute("SELECT COUNT(*) FROM merkle_files").fetchone()[0]
+    chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     return merkle_count == 0 and chunk_count > 0
+
+
+def _indexed_file_paths(conn) -> set[str]:
+    return {
+        row[0]
+        for row in conn.execute("SELECT DISTINCT file_path FROM chunks")
+    }
+
+
+def _metadata_for_empty_update(conn, incremental_mode: bool) -> tuple[str, str, str]:
+    fallback = embedder.StubEmbedder()
+    if not incremental_mode:
+        return fallback.model_id, str(fallback.dim), "int8"
+    return (
+        db.read_meta(conn, "embedder_model") or fallback.model_id,
+        db.read_meta(conn, "embedder_dim") or str(fallback.dim),
+        db.read_meta(conn, "embedder_quant") or "int8",
+    )
 
 
 def _clear_symbol_graph(conn) -> None:
@@ -435,7 +460,9 @@ def _write_meta(
     repo_name,
     repo_origin,
     commit_sha,
-    emb,
+    embedder_model,
+    embedder_dim,
+    embedder_quant,
     total_chunks,
     nodes_symbol,
     edges_symbol,
@@ -445,9 +472,9 @@ def _write_meta(
     db.write_meta(conn, "indexed_at", str(int(time.time())))
     db.write_meta(conn, "repo_origin", repo_origin)
     db.write_meta(conn, "commit_sha", commit_sha or "")
-    db.write_meta(conn, "embedder_model", emb.model_id)
-    db.write_meta(conn, "embedder_dim", str(emb.dim))
-    db.write_meta(conn, "embedder_quant", "int8")
+    db.write_meta(conn, "embedder_model", embedder_model)
+    db.write_meta(conn, "embedder_dim", embedder_dim)
+    db.write_meta(conn, "embedder_quant", embedder_quant)
     db.write_meta(conn, "reranker_model", "")
     db.write_meta(conn, "total_chunks", str(total_chunks))
     db.write_meta(conn, "total_nodes_symbol", str(nodes_symbol))

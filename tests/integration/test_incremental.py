@@ -141,3 +141,61 @@ def test_update_only_rechunks_added_and_modified_files(incremental_source, tmp_p
     assert vec_orphans == 0
     assert trigram_orphans == 0
     assert before_rows != after_rows
+
+
+def test_noop_update_preserves_existing_embedder_metadata(incremental_source, tmp_path):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        db.write_meta(conn, "embedder_model", "real://prior-model")
+        db.write_meta(conn, "embedder_dim", "768")
+        db.write_meta(conn, "embedder_quant", "float32")
+    finally:
+        conn.close()
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        assert db.read_meta(conn, "embedder_model") == "real://prior-model"
+        assert db.read_meta(conn, "embedder_dim") == "768"
+        assert db.read_meta(conn, "embedder_quant") == "float32"
+    finally:
+        conn.close()
+
+
+def test_update_schema_v1_missing_merkle_preserves_existing_db(
+    incremental_source,
+    tmp_path,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        conn.execute("CREATE TABLE preserve_me (value TEXT NOT NULL)")
+        conn.execute("INSERT INTO preserve_me (value) VALUES ('kept')")
+        conn.execute("DELETE FROM merkle_files")
+        conn.commit()
+    finally:
+        conn.close()
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        after_chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        preserved = conn.execute("SELECT value FROM preserve_me").fetchone()[0]
+        merkle_count = conn.execute("SELECT COUNT(*) FROM merkle_files").fetchone()[0]
+        distinct_files = conn.execute(
+            "SELECT COUNT(DISTINCT file_path) FROM chunks"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert preserved == "kept"
+    assert after_chunks == before_chunks
+    assert merkle_count == distinct_files
