@@ -26,7 +26,8 @@ def _conn():
             end_line INTEGER,
             signature TEXT,
             parent_id INTEGER,
-            chunk_id INTEGER
+            chunk_id INTEGER,
+            pagerank REAL DEFAULT 0.0
         );
         CREATE TABLE edges (
             src INTEGER NOT NULL,
@@ -387,3 +388,66 @@ def test_insert_edges_drops_unresolved_and_self_edges():
 
     assert written == 0
     assert conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 0
+
+
+def test_compute_pagerank_excludes_block_nodes_and_flow_edges():
+    conn = _conn()
+    source = graph.insert_nodes(
+        conn,
+        [
+            SymbolNode(
+                kind="file",
+                name="pkg/a.py",
+                short_name="a.py",
+                file_path="pkg/a.py",
+                start_line=1,
+                end_line=1,
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/a.py::source",
+                short_name="source",
+                file_path="pkg/a.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/a.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/a.py::target",
+                short_name="target",
+                file_path="pkg/a.py",
+                start_line=5,
+                end_line=7,
+                parent_name="pkg/a.py",
+            ),
+            SymbolNode(
+                kind="block",
+                name="pkg/a.py::source::block_1",
+                short_name="block_1",
+                file_path="pkg/a.py",
+                start_line=2,
+                end_line=2,
+                parent_name="pkg/a.py::source",
+            ),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, 'calls', 3.0)",
+        (source["pkg/a.py::source"], source["pkg/a.py::target"]),
+    )
+    conn.execute(
+        "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, 'controls', 99.0)",
+        (source["pkg/a.py::target"], source["pkg/a.py::source"]),
+    )
+    conn.execute(
+        "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, 'contains', 1.0)",
+        (source["pkg/a.py::source"], source["pkg/a.py::source::block_1"]),
+    )
+
+    count = graph.compute_pagerank(conn)
+
+    assert count == 3
+    rows = dict(conn.execute("SELECT name, pagerank FROM nodes").fetchall())
+    assert rows["pkg/a.py::target"] > rows["pkg/a.py::source"]
+    assert rows["pkg/a.py::source::block_1"] == 0.0

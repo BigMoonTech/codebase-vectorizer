@@ -16,6 +16,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 import pytest
 
 from cbv import cli  # noqa: E402
+import bootstrap  # noqa: E402
 
 
 def test_cli_known_verbs():
@@ -24,7 +25,7 @@ def test_cli_known_verbs():
     actions = {a.dest: a for a in parser._actions}
     sub = next(a for a in parser._actions if a.dest == "verb")
     choices = set(sub.choices.keys())
-    assert {"vectorize", "query", "list", "info"} <= choices
+    assert {"vectorize", "query", "stats", "list", "info"} <= choices
 
 
 def test_cli_dispatch_table_has_all_verbs():
@@ -56,6 +57,24 @@ def test_cli_query_top_k_default():
     parser = cli.build_parser()
     ns = parser.parse_args(["query", "r", "q"])
     assert ns.top_k == 10
+
+
+def test_cli_parses_stats_args():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["stats", "myrepo", "--top-k", "5"])
+    assert ns.verb == "stats"
+    assert ns.repo == "myrepo"
+    assert ns.top_k == 5
+
+
+def test_bootstrap_usage_and_allowlist_include_stats(capsys):
+    assert "stats" in bootstrap.ALLOWED_SUBCOMMANDS
+    bootstrap.usage()
+    assert "stats <name>" in capsys.readouterr().err
+
+
+def test_bootstrap_core_dependency_probe_includes_networkx():
+    assert "networkx" in bootstrap.CORE_DEPENDENCY_PROBE
 
 
 def test_cli_unknown_verb_errors(capsys):

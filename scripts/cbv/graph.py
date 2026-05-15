@@ -3,6 +3,19 @@ from __future__ import annotations
 from cbv.symbols import SymbolEdge, SymbolNode
 
 
+PAGERANK_EDGE_KINDS = (
+    "defines",
+    "calls",
+    "imports",
+    "inherits",
+    "references",
+    "contains",
+    "tests",
+    "documents",
+    "mentions",
+)
+
+
 def insert_nodes(conn, nodes: list[SymbolNode]) -> dict[str, int]:
     ids: dict[str, int] = {}
     for n in nodes:
@@ -80,6 +93,81 @@ def insert_edges(conn, edges: list[SymbolEdge], ids: dict[str, int]) -> int:
         )
         written += cur.rowcount
     return written
+
+
+def compute_pagerank(conn) -> int:
+    import networkx as nx
+
+    node_ids = {
+        int(node_id)
+        for (node_id,) in conn.execute("SELECT id FROM nodes WHERE kind != 'block'")
+    }
+    if not node_ids:
+        with conn:
+            conn.execute("UPDATE nodes SET pagerank = 0.0")
+        return 0
+
+    g = nx.DiGraph()
+    g.add_nodes_from(node_ids)
+    placeholders = ",".join("?" for _ in PAGERANK_EDGE_KINDS)
+    for src, dst, weight in conn.execute(
+        f"SELECT src, dst, weight FROM edges WHERE kind IN ({placeholders})",
+        PAGERANK_EDGE_KINDS,
+    ):
+        src_id = int(src)
+        dst_id = int(dst)
+        if src_id in node_ids and dst_id in node_ids:
+            g.add_edge(src_id, dst_id, weight=float(weight))
+
+    try:
+        scores = nx.pagerank(g, weight="weight")
+    except ModuleNotFoundError as exc:
+        if exc.name != "scipy":
+            raise
+        scores = _weighted_pagerank(g)
+    except nx.PowerIterationFailedConvergence:
+        uniform = 1.0 / len(node_ids)
+        scores = {node_id: uniform for node_id in node_ids}
+
+    with conn:
+        conn.execute("UPDATE nodes SET pagerank = 0.0")
+        conn.executemany(
+            "UPDATE nodes SET pagerank = ? WHERE id = ?",
+            [(float(score), int(node_id)) for node_id, score in scores.items()],
+        )
+    return len(scores)
+
+
+def _weighted_pagerank(g, *, alpha: float = 0.85, max_iter: int = 100, tol: float = 1.0e-6):
+    nodes = list(g.nodes)
+    if not nodes:
+        return {}
+    n = len(nodes)
+    scores = {node: 1.0 / n for node in nodes}
+    base = (1.0 - alpha) / n
+    dangling_share = 1.0 / n
+    out_weight = {
+        node: sum(float(data.get("weight", 1.0)) for _, _, data in g.out_edges(node, data=True))
+        for node in nodes
+    }
+
+    for _ in range(max_iter):
+        next_scores = {node: base for node in nodes}
+        dangling_total = sum(scores[node] for node in nodes if out_weight[node] == 0.0)
+        for node in nodes:
+            if out_weight[node] == 0.0:
+                continue
+            for _, dst, data in g.out_edges(node, data=True):
+                weight = float(data.get("weight", 1.0))
+                next_scores[dst] += alpha * scores[node] * weight / out_weight[node]
+        for node in nodes:
+            next_scores[node] += alpha * dangling_total * dangling_share
+        delta = sum(abs(next_scores[node] - scores[node]) for node in nodes)
+        scores = next_scores
+        if delta < n * tol:
+            return scores
+    uniform = 1.0 / n
+    return {node: uniform for node in nodes}
 
 
 def _is_compatible_dst_kind(edge_kind: str, node_kind: str) -> bool:

@@ -34,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     pq.add_argument("--lane", choices=("auto", "fast", "full"), default="auto",
                     help="query lane: auto, fast, or full (default auto)")
 
+    ps = sub.add_parser("stats", help="Print counts and top PageRank nodes")
+    ps.add_argument("repo", help="indexed repo name")
+    ps.add_argument("--top-k", type=int, default=10,
+                    help="number of PageRank nodes to return (default 10)")
+
     sub.add_parser("list", help="List every indexed repo")
     sub.add_parser("info", help="Print plugin paths and readiness")
 
@@ -45,6 +50,8 @@ def _import_command(verb: str):
         from cbv.commands import vectorize as mod
     elif verb == "query":
         from cbv.commands import query as mod
+    elif verb == "stats":
+        from cbv.commands import stats as mod
     elif verb == "list":
         from cbv.commands import list_cmd as mod
     elif verb == "info":
@@ -59,6 +66,7 @@ DISPATCH: Dict[str, Callable[[argparse.Namespace], int]] = {
     # result of the command's run() function.
     "vectorize": lambda ns: _import_command("vectorize").run(ns),
     "query":     lambda ns: _import_command("query").run(ns),
+    "stats":     lambda ns: _import_command("stats").run(ns),
     "list":      lambda ns: _import_command("list").run(ns),
     "info":      lambda ns: _import_command("info").run(ns),
 }

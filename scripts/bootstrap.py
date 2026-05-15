@@ -36,6 +36,11 @@ from cbv.paths import (  # noqa: E402
 
 REQS = SCRIPT_DIR / "requirements.txt"
 SUPPORTED_PY = {(3, 10), (3, 11), (3, 12), (3, 13)}
+ALLOWED_SUBCOMMANDS = {"vectorize", "query", "stats", "list"}
+CORE_DEPENDENCY_PROBE = (
+    "import sqlite_vec, transformers, numpy, pathspec, requests, "
+    "huggingface_hub, tree_sitter, tree_sitter_language_pack, networkx"
+)
 
 
 def check_python_version() -> None:
@@ -77,11 +82,7 @@ def deps_installed(py: Path) -> bool:
     be importable. Without this, the bootstrap thrashes pip install on every
     invocation when llama_cpp isn't installable (e.g. Windows without VS).
     """
-    core_probe = (
-        "import sqlite_vec, transformers, numpy, pathspec, requests, "
-        "huggingface_hub, tree_sitter, tree_sitter_language_pack"
-    )
-    if subprocess.run([str(py), "-c", core_probe], capture_output=True).returncode != 0:
+    if subprocess.run([str(py), "-c", CORE_DEPENDENCY_PROBE], capture_output=True).returncode != 0:
         return False
     parser_probe = (
         "from tree_sitter_language_pack import get_parser; "
@@ -155,10 +156,11 @@ def cmd_info() -> int:
 
 def usage() -> int:
     print(
-        "Usage: bootstrap.py {setup|vectorize|query|list|info} [args...]\n"
+        "Usage: bootstrap.py {setup|vectorize|query|stats|list|info} [args...]\n"
         "  setup                       create venv and install deps (idempotent)\n"
         "  vectorize <url|path>        index a repo\n"
         "  query <name> <question>     query an indexed repo\n"
+        "  stats <name>                print counts and top PageRank nodes\n"
         "  list                        list every indexed repo\n"
         "  info                        print all paths and readiness",
         file=sys.stderr,
@@ -182,7 +184,7 @@ def main() -> int:
         print("[bootstrap] OK", flush=True)
         return 0
 
-    if subcmd not in {"vectorize", "query", "list"}:
+    if subcmd not in ALLOWED_SUBCOMMANDS:
         print(f"Unknown subcommand: {subcmd}\n", file=sys.stderr)
         return usage()
 
