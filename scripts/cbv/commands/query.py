@@ -215,7 +215,7 @@ def _graph_expand(conn, seed_chunk_ids: list[int], *, per_node: int = 3) -> dict
         f"WHERE seed.chunk_id IN ({placeholders}) AND neighbor.chunk_id IS NOT NULL "
         f"AND edge.kind IN ({kind_placeholders}) "
         f"GROUP BY neighbor.chunk_id "
-        f"ORDER BY score DESC "
+        f"ORDER BY score DESC, neighbor.chunk_id ASC "
         f"LIMIT ?",
         (*seed_chunk_ids, *GRAPH_EDGE_KINDS, max(1, len(seed_chunk_ids) * per_node)),
     ).fetchall()

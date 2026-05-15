@@ -166,6 +166,26 @@ def test_graph_expand_uses_max_score_for_duplicate_neighbor_chunks():
         conn.close()
 
 
+def test_graph_expand_ties_use_chunk_id_order_before_limit():
+    conn = _graph_conn()
+    try:
+        _insert_node(conn, node_id=1, kind="function", chunk_id=10)
+        _insert_node(conn, node_id=2, kind="function", chunk_id=30)
+        _insert_node(conn, node_id=3, kind="function", chunk_id=20)
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, ?, ?)",
+            (1, 2, "calls", 2.0),
+        )
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?, ?, ?, ?)",
+            (1, 3, "calls", 2.0),
+        )
+
+        assert query_cmd._graph_expand(conn, [10], per_node=1) == {20: 2.0}
+    finally:
+        conn.close()
+
+
 def _graph_conn():
     conn = sqlite3.connect(":memory:")
     conn.execute(
