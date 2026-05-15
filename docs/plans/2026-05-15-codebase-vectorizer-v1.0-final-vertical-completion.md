@@ -943,7 +943,7 @@ git commit -m "slice 4 t1: compute pagerank and expose stats"
 - Create: `tests/unit/test_retrieval.py`
 - Modify: `tests/integration/test_query_lanes.py`
 
-- [ ] **Step 1: Write failing PPR tests**
+- [x] **Step 1: Write failing PPR tests**
 
 Create `tests/unit/test_retrieval.py`:
 
@@ -980,7 +980,7 @@ def test_personalized_pagerank_boosts_seed_neighborhood(tmp_path):
     assert scores[2] > scores.get(3, 0.0)
 ```
 
-- [ ] **Step 2: Implement PPR helper**
+- [x] **Step 2: Implement PPR helper**
 
 In `scripts/cbv/graph.py`, add:
 
@@ -1021,7 +1021,7 @@ def personalized_pagerank(conn, seed_chunk_ids: list[int], *, iterations: int = 
     return chunk_scores
 ```
 
-- [ ] **Step 3: Use PPR in full lane**
+- [x] **Step 3: Use PPR in full lane**
 
 In `query.py`, after BM25/dense/symbol seed fusion and 1-hop expansion:
 
@@ -1034,7 +1034,7 @@ fused = _rrf([bm25_hits, dense_hits, sym_hits, expansion, ppr_hits], k=RRF_K)
 
 Update `why_this_was_returned` source tags so PPR-sourced candidates can report `ppr` alongside `bm25`, `dense`, `symbol`, and `graph`.
 
-- [ ] **Step 4: Verify full-lane JSON**
+- [x] **Step 4: Verify full-lane JSON**
 
 In `tests/integration/test_query_lanes.py`, assert:
 
@@ -1044,7 +1044,7 @@ assert blob["expansion_size"] > 0
 assert any("ppr" in r["why_this_was_returned"] or "graph" in r["why_this_was_returned"] for r in blob["results"])
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 

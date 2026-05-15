@@ -41,6 +41,7 @@ This handoff was updated after Task 3 approval:
 - Task 3 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 4 checkpoint verification passed and is marked complete in the final completion plan.
 - Task 5 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 5A is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -74,11 +75,21 @@ This handoff was updated after Task 3 approval:
   - PageRank convergence failure falls back to uniform scores and appends a warning.
   - `stats` is wired through CLI and bootstrap, returns counts, top PageRank nodes, and cluster label details.
   - `stats` handles legacy schema errors cleanly and defaults `top_k` for direct `Namespace` callers.
+- Task 5A landed across:
+  - `d5be529 slice 4 t1a: add personalized pagerank to full lane`
+  - `9159a5a slice 4 t1a: align ppr with expansion set`
+  - `6555c04 slice 4 t1a: bound ppr fallback candidates`
+- Task 5A review fixes include:
+  - Full lane seeds PPR from the post-expansion bounded set.
+  - PPR candidates are bounded to initial seed plus graph expansion before RRF.
+  - Full-lane result tags now require and surface `ppr`.
+  - The local no-SciPy weighted PageRank fallback preserves personalized dangling behavior and returns last non-uniform scores on iteration limit.
+  - PPR convergence fallback respects `candidate_chunk_ids`.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Milestone 2 Task 5A: query-time Personalized PageRank for the full lane.
+- Next action is Milestone 2 Task 6: `relate`, `graph`, `flow`, and the `codebase-relate` skill.
 
 ## Verified Baseline
 
@@ -109,6 +120,12 @@ Latest verification in the current session:
   - vectorized `tests/fixtures/simple-python`;
   - `cbv stats simple-python --top-k 3` returned nonzero PageRank top nodes, highest `pkg/db.py::open_conn` at `0.104394`.
 - Task 5 targeted re-review approved with no findings.
+- Task 5A focused verification: `20 passed`.
+- Task 5A full-suite regression: `304 passed, 1 skipped`.
+- Task 5A prepared-venv smoke passed:
+  - vectorized `tests/fixtures/simple-python`;
+  - full-lane query returned `pipeline_used: full`, `expansion_size: 9`, and `ppr` in result source tags.
+- Task 5A targeted spec re-review approved with no findings; code-quality re-review had one minor fallback-candidate issue fixed in `6555c04`.
 
 ## What Exists Today
 
@@ -139,6 +156,7 @@ Current Slice 3/Milestone 1 work adds:
 - Full lane using BM25, dense, symbol exact, graph expansion, and RRF.
 - Global PageRank computation over symbol nodes during vectorize.
 - `stats` command with counts, cluster label details, and top PageRank nodes.
+- Query-time Personalized PageRank in the full lane, seeded from the post-expansion bounded set.
 
 Important implementation detail:
 
@@ -154,16 +172,15 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces still to implement:
 
-1. Query-time Personalized PageRank for the full lane.
-2. Cross-encoder reranking and refined-query hints.
-3. `codebase-relate`, plus `graph` and `flow` CLI aliases.
-4. Content-hash embedding cache.
-5. Merkle incremental indexing.
-6. Intra-procedural CFG/DFG flow edges and flow relate verbs.
-7. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
-8. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
-9. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
-10. README and skill docs aligned to final behavior.
+1. Cross-encoder reranking and refined-query hints.
+2. `codebase-relate`, plus `graph` and `flow` CLI aliases.
+3. Content-hash embedding cache.
+4. Merkle incremental indexing.
+5. Intra-procedural CFG/DFG flow edges and flow relate verbs.
+6. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
+7. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
+8. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
+9. README and skill docs aligned to final behavior.
 
 ## Completion Tracking Rule
 
@@ -189,9 +206,9 @@ User requested:
 
 Recommended next action:
 
-1. Begin Milestone 2 Task 5A: query-time Personalized PageRank for the full lane.
-2. After Task 5A implementation, verification, and review pass, mark Task 5A complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
-3. Continue with Task 6 for `relate`, `graph`, `flow`, and the `codebase-relate` skill.
+1. Begin Milestone 2 Task 6: `relate`, `graph`, `flow`, and the `codebase-relate` skill.
+2. After Task 6 implementation, verification, and review pass, mark Task 6 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Continue with Milestone 3 Task 7 for reranking, confidence, and refined queries.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.
