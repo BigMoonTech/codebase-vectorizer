@@ -76,6 +76,7 @@ def test_kind_is_window_in_slice_1():
 def test_language_detection_from_extension():
     assert chunker.detect_language(Path("foo.py")) == "python"
     assert chunker.detect_language(Path("foo.js")) == "javascript"
+    assert chunker.detect_language(Path("foo.jsx")) == "javascript"
     assert chunker.detect_language(Path("foo.ts")) == "typescript"
     assert chunker.detect_language(Path("foo.tsx")) == "tsx"
     assert chunker.detect_language(Path("foo.go")) == "go"
@@ -181,6 +182,20 @@ def test_orchestrator_falls_back_for_markdown():
     assert chunks[0].name is None
 
 
+def test_orchestrator_falls_back_when_parser_returns_none(monkeypatch):
+    from cbv import parser
+
+    content = "def add(a, b):\n    return a + b\n"
+    monkeypatch.setattr(parser, "parse", lambda source, language: None)
+    chunks = list(chunker.chunk_text(
+        content, language="python", file_path="x.py", budget_bytes=20,
+    ))
+    assert "".join(c.content for c in chunks) == content
+    assert all(c.kind == "window" for c in chunks)
+    assert all(c.ast_path is None for c in chunks)
+    assert all(c.name is None for c in chunks)
+
+
 def test_orchestrator_concat_invariant_python():
     content = (
         "import os\n"
@@ -209,6 +224,21 @@ def test_chunk_file_python(tmp_path):
     assert chunks[0].kind == "function"
     assert chunks[0].name == "add"
     assert chunks[0].ast_path == "module/function[add]"
+
+
+def test_chunk_file_jsx_uses_javascript_ast(tmp_path):
+    p = tmp_path / "x.jsx"
+    p.write_text(
+        "function App() {\n"
+        "  return <main>Hello</main>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    chunks = list(chunker.chunk_file(p, budget_bytes=1500))
+    assert chunks
+    assert chunks[0].language == "javascript"
+    assert any(c.ast_path is not None for c in chunks)
+    assert not all(c.kind == "window" for c in chunks)
 
 
 def test_chunk_file_unknown_extension_falls_back(tmp_path):

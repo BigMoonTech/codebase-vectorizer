@@ -18,7 +18,7 @@ from typing import Iterator, Optional
 EXTENSION_LANGUAGE = {
     ".py": "python", ".pyi": "python",
     ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-    ".jsx": "jsx",
+    ".jsx": "javascript",
     ".ts": "typescript", ".tsx": "tsx",
     ".go": "go",
     ".rs": "rust",
