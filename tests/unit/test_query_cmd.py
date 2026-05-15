@@ -58,6 +58,7 @@ def test_query_returns_lane_shape_without_explicit_lane(indexed_repo, capsys):
     assert blob["pipeline_used"] == "full"
     assert "results" in blob and isinstance(blob["results"], list)
     assert "refined_queries" in blob
+    assert blob["reranker_model"] == "stub://lexical-overlap-reranker"
     assert isinstance(blob["expansion_size"], int)
 
 
@@ -79,6 +80,53 @@ def test_query_top_k_caps_result_count(indexed_repo, capsys):
     out = capsys.readouterr().out
     blob = json.loads([l for l in out.strip().splitlines() if l.strip()][-1])
     assert len(blob["results"]) <= 1
+
+
+def test_query_reranks_candidate_rows_before_top_k(indexed_repo, capsys, monkeypatch):
+    monkeypatch.setenv("CBV_STUB_RERANKER", "1")
+    ns = argparse.Namespace(
+        repo=indexed_repo,
+        question="fetch SELECT users",
+        top_k=1,
+        lane="full",
+    )
+
+    rc = query_cmd.run(ns)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    blob = json.loads([l for l in out.strip().splitlines() if l.strip()][-1])
+    assert blob["reranker_model"] == "stub://lexical-overlap-reranker"
+    assert len(blob["results"]) == 1
+    assert blob["results"][0]["file_relative"] == "db.py"
+    assert blob["results"][0]["score"] >= 1.0
+    assert blob["refined_queries"] == []
+
+
+def test_refined_queries_return_original_query_when_no_rows():
+    assert query_cmd._refined_queries("where is auth", []) == ["where is auth"]
+
+
+def test_refined_queries_suggest_low_confidence_named_results():
+    rows = [
+        {"name": "first_match", "score": 0.5},
+        {"name": "second_match", "score": 0.2},
+        {"name": "third_match", "score": 0.1},
+        {"name": "fourth_match", "score": 0.0},
+    ]
+
+    assert query_cmd._refined_queries("where is auth", rows) == [
+        "where is auth first_match",
+        "where is auth second_match",
+        "where is auth third_match",
+    ]
+
+
+def test_refined_queries_empty_when_top_score_confident():
+    assert query_cmd._refined_queries(
+        "where is auth",
+        [{"name": "first_match", "score": 1.0}],
+    ) == []
 
 
 def test_query_missing_repo_clean_error(monkeypatch, tmp_path, capsys):

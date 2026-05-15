@@ -26,7 +26,7 @@ from typing import Dict, List
 
 import numpy as np
 
-from cbv import db, embedder, graph, paths, quantize, query_router
+from cbv import db, embedder, graph, paths, quantize, query_router, reranker
 
 RRF_K = 60  # standard RRF damping constant
 GRAPH_EDGE_KINDS = ("calls", "imports", "inherits", "references")
@@ -100,11 +100,8 @@ def run(ns: argparse.Namespace) -> int:
                 k=RRF_K,
                 source_names=["bm25", "dense", "symbol", "graph", "ppr"],
             )
-        top = fused[: ns.top_k]
-
-        # Materialize result rows.
-        results = []
-        for rank, (chunk_id, score, sources) in enumerate(top, start=1):
+        candidate_rows = []
+        for chunk_id, score, sources in fused:
             row = conn.execute(
                 "SELECT file_path, kind, name, start_line, end_line, content "
                 "FROM chunks WHERE id = ?", (chunk_id,)
@@ -113,8 +110,8 @@ def run(ns: argparse.Namespace) -> int:
                 continue
             file_rel, kind, name, sl, el, content = row
             file_abs = (repo_dir / "source" / file_rel).resolve()
-            results.append({
-                "rank": rank,
+            candidate_rows.append({
+                "rank": 0,
                 "file_absolute": str(file_abs),
                 "file_relative": file_rel,
                 "start_line": sl,
@@ -126,14 +123,25 @@ def run(ns: argparse.Namespace) -> int:
                 "why_this_was_returned": "+".join(sorted(sources)),
             })
 
+        rr = reranker.make_reranker()
+        scores = rr.score(ns.question, [row["preview"] for row in candidate_rows])
+        for row, score in zip(candidate_rows, scores):
+            row["score"] = float(score)
+        candidate_rows.sort(key=lambda row: float(row["score"]), reverse=True)
+        final_rows = candidate_rows[: ns.top_k]
+        for rank, row in enumerate(final_rows, start=1):
+            row["rank"] = rank
+            row["score"] = round(float(row["score"]), 4)
+
         blob = {
             "repo": ns.repo,
             "query": ns.question,
             "repo_dir": str(repo_dir),
             "pipeline_used": lane,
-            "results": results,
-            "refined_queries": [],   # Slice 15
+            "results": final_rows,
+            "refined_queries": _refined_queries(ns.question, final_rows),
             "expansion_size": len(expansion) if lane == "full" else 0,
+            "reranker_model": rr.model_id,
         }
         print(json.dumps(blob), flush=True)
         return 0
@@ -230,6 +238,16 @@ def _graph_expand(conn, seed_chunk_ids: list[int], *, per_node: int = 3) -> dict
         (*seed_chunk_ids, *GRAPH_EDGE_KINDS, max(1, len(seed_chunk_ids) * per_node)),
     ).fetchall()
     return {int(row[0]): float(row[1]) for row in rows}
+
+
+def _refined_queries(query: str, rows: list[dict]) -> list[str]:
+    if not rows:
+        return [query]
+    top_score = float(rows[0].get("score", 0.0))
+    if top_score >= 1.0:
+        return []
+    names = [r.get("name") for r in rows[:5] if r.get("name")]
+    return [f"{query} {name}" for name in names[:3]]
 
 
 def _query_symbol_token(query: str) -> str:

@@ -2,6 +2,7 @@
 # Pin minor-version floors per spec; let pip resolve the latest compatible.
 sqlite-vec>=0.1.9,<0.2.0
 transformers>=4.42
+sentence-transformers>=3.0
 torch>=2.3
 llama-cpp-python>=0.2.80
 huggingface_hub>=0.23.0
