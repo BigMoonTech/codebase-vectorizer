@@ -18,14 +18,21 @@ class LocalLLMArchitectureWriter(ArchitectureWriter):
         command = os.environ.get("CBV_ARCHITECTURE_COMMAND")
         if not command:
             raise RuntimeError("local LLM architecture writer is not configured")
+        timeout = float(os.environ.get("CBV_ARCHITECTURE_TIMEOUT_SECONDS", "30"))
 
-        result = subprocess.run(
-            command,
-            input=json.dumps(payload, sort_keys=True),
-            text=True,
-            capture_output=True,
-            shell=True,
-        )
+        try:
+            result = subprocess.run(
+                command,
+                input=json.dumps(payload, sort_keys=True),
+                text=True,
+                capture_output=True,
+                shell=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                f"local LLM architecture writer timed out after {timeout:g} seconds"
+            ) from e
         if result.returncode != 0:
             detail = result.stderr.strip() or f"exit code {result.returncode}"
             raise RuntimeError(f"local LLM architecture writer failed: {detail}")

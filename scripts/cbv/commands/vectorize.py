@@ -432,9 +432,12 @@ def run(ns: argparse.Namespace) -> int:
 
     bench_results = {}
     if getattr(ns, "bench", False):
-        _bench_rc, bench_results, bench_error = bench_cmd.run_bench(repo_name, emit=False)
-        if bench_error is not None:
-            warnings.append(f"bench failed: {bench_error}")
+        try:
+            _bench_rc, bench_results, bench_error = bench_cmd.run_bench(repo_name, emit=False)
+            if bench_error is not None:
+                warnings.append(f"bench failed: {bench_error}")
+        except Exception as e:
+            warnings.append(f"bench failed: {e}")
 
     manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
                                 file_count, len(all_chunks), warnings,

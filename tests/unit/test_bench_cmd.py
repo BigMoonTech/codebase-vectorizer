@@ -99,3 +99,37 @@ def test_bench_command_rejects_invalid_jsonl_rows(tmp_home, capsys):
     err = capsys.readouterr().err
     assert "invalid JSONL row" in err
     assert "expected_files must be a string list" in err
+
+
+def test_query_files_collapses_duplicate_chunk_rows(monkeypatch):
+    def fake_query_run(ns):
+        print(
+            json.dumps(
+                {
+                    "results": [
+                        {"file_relative": "pkg/a.py"},
+                        {"file_relative": "pkg/a.py"},
+                        {"file_relative": "pkg/b.py"},
+                    ]
+                }
+            )
+        )
+        return 0
+
+    monkeypatch.setattr(bench_cmd.query_cmd, "run", fake_query_run)
+
+    rc, files, error = bench_cmd._query_files("demo", "find auth")
+
+    assert rc == 0
+    assert error is None
+    assert files == ["pkg/a.py", "pkg/b.py"]
+
+
+def test_query_paths_include_stable_project_bench_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_bench = Path(bench_cmd.__file__).resolve().parents[3] / "bench"
+
+    paths_to_check = bench_cmd._query_paths(tmp_path / "repo")
+
+    assert project_bench / "coir_subset.jsonl" in paths_to_check
+    assert project_bench / "repoeval_mini.jsonl" in paths_to_check

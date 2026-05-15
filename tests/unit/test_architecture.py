@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
@@ -78,3 +79,33 @@ def test_fallback_supports_plan_count_keys():
     assert "Symbol edges: 4" in text
     assert "Flow nodes: 5" in text
     assert "Flow edges: 6" in text
+
+
+def test_local_llm_writer_passes_configured_timeout(monkeypatch):
+    seen = {}
+
+    def fake_run(*args, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="# ok\n", stderr="")
+
+    monkeypatch.setenv("CBV_ARCHITECTURE_COMMAND", "fake-llm")
+    monkeypatch.setenv("CBV_ARCHITECTURE_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setattr(architecture.subprocess, "run", fake_run)
+
+    assert architecture.LocalLLMArchitectureWriter().write({"repo_name": "demo"}) == "# ok\n"
+    assert seen["timeout"] == 12.5
+
+
+def test_local_llm_writer_converts_timeout_to_runtime_error(monkeypatch):
+    def timeout_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setenv("CBV_ARCHITECTURE_COMMAND", "fake-llm")
+    monkeypatch.setattr(architecture.subprocess, "run", timeout_run)
+
+    try:
+        architecture.LocalLLMArchitectureWriter().write({"repo_name": "demo"})
+    except RuntimeError as e:
+        assert "timed out" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError")

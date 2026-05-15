@@ -186,6 +186,34 @@ def test_vectorize_persists_bench_failure_warning_to_manifest(
     assert "bench failed: bad benchmark row" in manifest["warnings"]
 
 
+def test_vectorize_treats_bench_exception_as_non_critical(
+    tmp_home,
+    source_repo,
+    monkeypatch,
+    capsys,
+):
+    def raise_bench(*args, **kwargs):
+        raise RuntimeError("benchmark adapter crashed")
+
+    monkeypatch.setattr(vec_cmd.bench_cmd, "run_bench", raise_bench)
+
+    ns = argparse.Namespace(
+        source=str(source_repo),
+        output_dir=None,
+        max_file_mb=1.5,
+        bench=True,
+    )
+    rc = vec_cmd.run(ns)
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+    manifest = json.loads((paths.repo_dir("upstream") / "manifest.json").read_text())
+
+    assert rc == 0
+    assert "bench failed: benchmark adapter crashed" in blob["warnings"]
+    assert "bench failed: benchmark adapter crashed" in manifest["warnings"]
+
+
 def test_vectorize_populates_symbol_trigrams(tmp_home, source_repo):
     ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
     vec_cmd.run(ns)

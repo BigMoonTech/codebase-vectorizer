@@ -104,12 +104,15 @@ def _read_queries(repo_dir: Path) -> list[dict[str, Any]]:
 
 def _query_paths(repo_dir: Path) -> list[Path]:
     workspace_bench = Path.cwd() / "bench"
-    return [
+    project_bench = Path(__file__).resolve().parents[3] / "bench"
+    return _unique_paths([
         workspace_bench / "coir_subset.jsonl",
         workspace_bench / "repoeval_mini.jsonl",
+        project_bench / "coir_subset.jsonl",
+        project_bench / "repoeval_mini.jsonl",
         repo_dir / "source" / "bench" / "queries.jsonl",
         repo_dir / "bench" / "queries.jsonl",
-    ]
+    ])
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -160,11 +163,16 @@ def _query_files(repo: str, question: str) -> tuple[int, list[str], str | None]:
     results = blob.get("results")
     if not isinstance(results, list):
         return 2, [], f"query output missing results for {question!r}"
-    actual = [
-        row["file_relative"]
-        for row in results
-        if isinstance(row, dict) and isinstance(row.get("file_relative"), str)
-    ]
+    actual = []
+    seen = set()
+    for row in results:
+        if not isinstance(row, dict) or not isinstance(row.get("file_relative"), str):
+            continue
+        file_relative = row["file_relative"]
+        if file_relative in seen:
+            continue
+        seen.add(file_relative)
+        actual.append(file_relative)
     return 0, actual, None
 
 
@@ -175,3 +183,15 @@ def _write_results(repo_dir: Path, summary: dict[str, Any], queries: list[dict[s
         json.dumps({"summary": summary, "queries": queries}, indent=2),
         encoding="utf-8",
     )
+
+
+def _unique_paths(path_list: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    unique = []
+    for path in path_list:
+        key = path.resolve(strict=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
