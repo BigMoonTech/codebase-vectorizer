@@ -3,14 +3,15 @@
 ## Current State
 
 - Branch: `dev`
-- Current HEAD: `2104d5b slice 3 t2: preserve chunkless file nodes`
-- `dev` is ahead of `origin/dev` by six local source commits plus the pending checklist/handoff commit:
+- Current HEAD: `281cf27 docs: mark task 2 complete`
+- `dev` is ahead of `origin/dev` by seven local commits:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
   - `1d6bdc4 docs: mark task 1 complete`
   - `4196e6d slice 3 t2: populate symbol graph`
   - `758be1e slice 3 t2: address symbol graph review`
   - `2104d5b slice 3 t2: preserve chunkless file nodes`
+  - `281cf27 docs: mark task 2 complete`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -23,11 +24,12 @@ This handoff was updated during Task 2 review. At the moment of this update:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 2A is in progress with a fresh subagent.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- The only expected uncommitted change is this handoff update itself.
+- The only expected uncommitted change is this handoff state correction itself.
 
 ## Verified Baseline
 
@@ -117,9 +119,9 @@ User requested:
 
 Recommended next action:
 
-1. Commit the Task 2 checklist/handoff update.
-2. Continue with Task 2A, then Task 3, using `superpowers:subagent-driven-development` with fresh subagents and review after each task.
-3. Task 2A is required before symbol extraction can be called spec-complete; Task 2 is only the reviewed bootstrap.
+1. Finish Task 2A implementation and review loop.
+2. If Task 2A reviews pass, mark Task 2A complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md` and commit the checklist update.
+3. Continue with Task 3 using `superpowers:subagent-driven-development` with fresh subagents and review after each task.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.
