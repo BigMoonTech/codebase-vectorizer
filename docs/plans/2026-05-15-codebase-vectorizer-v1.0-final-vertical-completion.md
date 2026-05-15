@@ -1707,7 +1707,7 @@ git commit -m "slice 7 t1: add python flow graph bootstrap"
 - Create: `tests/fixtures/flow-heavy/js_flow.js`
 - Create: `tests/fixtures/flow-heavy/ts_flow.ts`
 
-- [ ] **Step 1: Add failing CFG/DFG behavior tests**
+- [x] **Step 1: Add failing CFG/DFG behavior tests**
 
 Add tests that assert:
 
@@ -1740,7 +1740,7 @@ def test_tier_a_flow_extractors_do_not_fail_and_emit_blocks(language, filename, 
     assert any(e.kind == "controls" for e in edges)
 ```
 
-- [ ] **Step 2: Generalize flow API**
+- [x] **Step 2: Generalize flow API**
 
 Replace language-specific entrypoints with:
 
@@ -1758,7 +1758,7 @@ Requirements:
 - Emit `dataflow` edges for intra-procedural def-use pairs where a definition reaches a use along the CFG.
 - Unsupported or failed per-function extraction must append a warning and preserve symbol graph output.
 
-- [ ] **Step 3: Complete flow relate verbs**
+- [x] **Step 3: Complete flow relate verbs**
 
 `relate.py` must answer:
 - `paths-through(function, [from_line, to_line])`: bounded CFG path sequences with guard predicates.
@@ -1779,7 +1779,7 @@ Add JSON fields per result:
 }
 ```
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run:
 

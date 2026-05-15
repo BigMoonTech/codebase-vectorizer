@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation commit: `f11e5af slice 7 t1: guard flow scope edges`
+- Latest confirmed implementation commit: `f2b9af0 slice 7 t1a: seed c parameters in flow`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -56,6 +56,16 @@
   - `2adaae3 slice 7 t1: add python flow graph bootstrap`
   - `7ab6daf slice 7 t1: harden python flow bootstrap`
   - `f11e5af slice 7 t1: guard flow scope edges`
+  - `fd2725d docs: mark task 10 complete`
+  - `163ac9e slice 7 t1a: complete intra-procedural flow extraction`
+  - `5eb4b69 slice 7 t1a: complete flow semantics`
+  - `b6a8397 slice 7 t1a: cover ruby flow guards`
+  - `4d81390 slice 7 t1a: bound flow path ranges`
+  - `9aba417 slice 7 t1a: bind conditions to dataflow paths`
+  - `cdaa847 slice 7 t1a: cover assigned and cpp flow symbols`
+  - `8f5c15e slice 7 t1a: harden flow edge cases`
+  - `ae20d37 slice 7 t1a: harden tree-sitter flow edges`
+  - `f2b9af0 slice 7 t1a: seed c parameters in flow`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -64,7 +74,7 @@
 
 ## Current Working State
 
-This handoff was updated after Task 10 approval:
+This handoff was updated after Task 10A approval:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
@@ -78,6 +88,7 @@ This handoff was updated after Task 10 approval:
 - Task 8 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 9 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 10 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 10A is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -191,11 +202,31 @@ This handoff was updated after Task 10 approval:
   - Nested function, class, lambda, and comprehension scopes are pruned from outer-function dataflow.
   - Symbol extraction failure no longer creates orphan block nodes or flow edges.
   - `relate` flow verbs now return useful JSON over indexed flow rows while preserving the clean `flow not indexed` fallback.
+- Task 10A landed across:
+  - `163ac9e slice 7 t1a: complete intra-procedural flow extraction`
+  - `5eb4b69 slice 7 t1a: complete flow semantics`
+  - `b6a8397 slice 7 t1a: cover ruby flow guards`
+  - `4d81390 slice 7 t1a: bound flow path ranges`
+  - `9aba417 slice 7 t1a: bind conditions to dataflow paths`
+  - `cdaa847 slice 7 t1a: cover assigned and cpp flow symbols`
+  - `8f5c15e slice 7 t1a: harden flow edge cases`
+  - `ae20d37 slice 7 t1a: harden tree-sitter flow edges`
+  - `f2b9af0 slice 7 t1a: seed c parameters in flow`
+- Task 10A review fixes include:
+  - General `flow.extract_flow(language, file_path, source)` now indexes spec-aligned intra-procedural block graphs.
+  - Python uses `ast` and emits entry, statement, and exit blocks, branch/loop `controls`, `guards`, and branch-sensitive `dataflow`.
+  - Python flow now handles alternate branch reaching definitions, all argument forms, augmented assignment target reads, nested-scope pruning, break/continue CFG behavior, and legacy `extract_python_flow` is documented as the old bootstrap extractor.
+  - Tree-sitter best-effort flow covers Tier-A forms for JavaScript, TypeScript, TSX, Go, Rust, Java, C, C++, Ruby, and C# where grammars expose supported nodes.
+  - JS/TS assigned arrow/function expressions, Ruby instance/singleton methods, Ruby `if`/`while`/`break`/`next`, Rust loop/break/continue expressions, and C/C++ class/struct scoped methods are covered.
+  - Tree-sitter augmented assignment target reads are detected by node type and operator across common Tier-A grammars, including C/C++ parameter seeding through nested function declarators.
+  - `vectorize` warns when supported flow extraction returns no blocks or when produced flow nodes cannot be inserted because parent symbols are missing; symbol/file rows are preserved and orphan blocks are avoided.
+  - `relate` flow verbs now return semantic CFG/DFG JSON for `paths-through`, `reaching-definitions`, `reachable-uses`, and `conditions-for`, including bounded line ranges, producing dataflow paths, guard predicates, variables, and stable result fields.
+  - Flow metadata matching exact-filters parsed JSON before applying `top_k`, avoiding dropped exact matches after broad substring prefilters.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Milestone 5 Task 10A: spec-complete intra-procedural CFG/DFG coverage and flow relate verbs.
+- Next action is Task 11: concept clusters.
 
 ## Verified Baseline
 
@@ -259,6 +290,12 @@ Latest verification in the current session:
 - Task 10 whitespace check: `git diff --check 24b2037..HEAD` reported no issues.
 - Task 10 targeted spec re-review approved with no findings.
 - Task 10 targeted code-quality re-review approved with no findings.
+- Task 10A focused verification after final C/C++ parameter fix: `68 passed`.
+- Task 10A adjacent vectorize/full-index/incremental regression after final fix: `37 passed`.
+- Task 10A full-suite regression after final fix: `417 passed, 1 skipped`.
+- Task 10A whitespace check: `git diff --check fd2725d..HEAD` reported no issues.
+- Task 10A targeted spec re-review approved with no findings.
+- Task 10A targeted code-quality re-review approved with no findings.
 
 ## What Exists Today
 
@@ -296,7 +333,7 @@ Current Slice 3/Milestone 1 work adds:
 - Full-lane reranking, query-time `reranker_model`, and low-confidence `refined_queries` hints.
 - Cross-repo content-hash embedding cache with `--no-cache`, hit-rate reporting, wrong-length fallback, and stale-schema migration.
 - Merkle incremental indexing with `vectorize --update`, safe Merkle backfill, retryable chunk failures, and transactional update writes.
-- Python bootstrap flow indexing with block nodes, `controls`/`guards`/`dataflow` edges, vectorize flow counts, and useful flow relate JSON.
+- Spec-complete Task 10A intra-procedural flow indexing with block nodes, `controls`/`guards`/`dataflow` edges, vectorize flow counts, Tier-A best-effort tree-sitter coverage, and semantic flow relate JSON.
 
 Important implementation detail:
 
@@ -312,11 +349,10 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces still to implement:
 
-1. Spec-complete intra-procedural CFG/DFG flow coverage beyond the Python bootstrap, including Tier-A best effort and full flow relate result fields.
-2. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
-3. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
-4. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
-5. README and skill docs aligned to final behavior.
+1. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
+2. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
+3. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
+4. README and skill docs aligned to final behavior.
 
 ## Completion Tracking Rule
 
@@ -342,9 +378,9 @@ User requested:
 
 Recommended next action:
 
-1. Begin Milestone 5 Task 10A for spec-complete intra-procedural CFG/DFG coverage and flow relate verbs.
-2. After Task 10A implementation, verification, and review pass, mark Task 10A complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
-3. Continue with Task 11 for concept clusters.
+1. Begin Task 11 for concept clusters.
+2. After Task 11 implementation, verification, and review pass, mark Task 11 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Continue with the remaining architecture, benchmark, README, and skill-doc tasks.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.
@@ -352,7 +388,7 @@ Recommended next action:
 ## Do Not Drift
 
 - Do not replace spec-required behavior with deterministic test-only shortcuts.
-- Do not call Python-only flow, heuristic symbols, global PageRank alone, deterministic cluster labels, or deterministic architecture summaries "v1.0 done".
+- Do not call heuristic symbols, global PageRank alone, deterministic cluster labels, or deterministic architecture summaries "v1.0 done".
 - Do not leave plan checklist state stale after completing tasks.
 - Do not polish endlessly before the product exists.
 - Do not build around failures or leave sloppy programming.
