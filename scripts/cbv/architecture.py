@@ -59,10 +59,10 @@ def _fallback(payload: dict) -> str:
         "## Index Summary",
         "",
         f"- Chunks: {_count(counts, 'chunks')}",
-        f"- Symbol nodes: {_count(counts, 'symbol_nodes')}",
-        f"- Symbol edges: {_count(counts, 'symbol_edges')}",
-        f"- Flow nodes: {_count(counts, 'flow_nodes')}",
-        f"- Flow edges: {_count(counts, 'flow_edges')}",
+        f"- Symbol nodes: {_count(counts, 'nodes_symbol', 'symbol_nodes')}",
+        f"- Symbol edges: {_count(counts, 'edges_symbol', 'symbol_edges')}",
+        f"- Flow nodes: {_count(counts, 'nodes_block', 'flow_nodes')}",
+        f"- Flow edges: {_count(counts, 'edges_flow', 'flow_edges')}",
         f"- Clusters: {_count(counts, 'clusters')}",
         "",
         "## Central Symbols",
@@ -88,11 +88,14 @@ def _fallback(payload: dict) -> str:
     return "\n".join(lines)
 
 
-def _count(counts: dict[str, Any], key: str) -> int:
-    try:
-        return int(counts.get(key, 0) or 0)
-    except (TypeError, ValueError):
-        return 0
+def _count(counts: dict[str, Any], key: str, *aliases: str) -> int:
+    for candidate in (key, *aliases):
+        if candidate in counts:
+            try:
+                return int(counts.get(candidate, 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+    return 0
 
 
 def _node_label(node: dict[str, Any]) -> str:

@@ -413,20 +413,19 @@ def run(ns: argparse.Namespace) -> int:
                 edges_flow,
                 clusters_indexed,
             )
-        architecture_text, architecture_warning = architecture.render_architecture(
-            architecture_payload,
-            writer=architecture.LocalLLMArchitectureWriter(),
-        )
-        if architecture_warning is not None:
-            warnings.append(architecture_warning)
-        (repo_dir / "ARCHITECTURE.md").write_text(
-            architecture_text,
-            encoding="utf-8",
-        )
-        manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
-                                    file_count, len(all_chunks), warnings,
-                                    embedding_cache_hit_rate)
-        (repo_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        try:
+            architecture_text, architecture_warning = architecture.render_architecture(
+                architecture_payload,
+                writer=architecture.LocalLLMArchitectureWriter(),
+            )
+            if architecture_warning is not None:
+                warnings.append(architecture_warning)
+            (repo_dir / "ARCHITECTURE.md").write_text(
+                architecture_text,
+                encoding="utf-8",
+            )
+        except Exception as e:
+            warnings.append(f"ARCHITECTURE.md generation failed; non-critical artifact: {e}")
 
     finally:
         conn.close()
@@ -436,6 +435,11 @@ def run(ns: argparse.Namespace) -> int:
         _bench_rc, bench_results, bench_error = bench_cmd.run_bench(repo_name, emit=False)
         if bench_error is not None:
             warnings.append(f"bench failed: {bench_error}")
+
+    manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
+                                file_count, len(all_chunks), warnings,
+                                embedding_cache_hit_rate)
+    (repo_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     # Step 8: emit v1.0 summary JSON on stdout (last line).
     elapsed = time.time() - t_start
@@ -1116,10 +1120,10 @@ def _build_architecture_payload(
         "repo_name": repo_name,
         "counts": {
             "chunks": chunks_indexed,
-            "symbol_nodes": nodes_symbol,
-            "symbol_edges": edges_symbol,
-            "flow_nodes": nodes_block,
-            "flow_edges": edges_flow,
+            "nodes_symbol": nodes_symbol,
+            "edges_symbol": edges_symbol,
+            "nodes_block": nodes_block,
+            "edges_flow": edges_flow,
             "clusters": clusters_indexed,
         },
         "top_nodes": top_nodes,

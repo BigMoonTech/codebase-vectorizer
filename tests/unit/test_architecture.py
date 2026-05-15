@@ -54,3 +54,27 @@ def test_render_architecture_falls_back_when_writer_raises():
     assert "pkg/router.py::route" in text
     assert warning is not None
     assert "LLM architecture generation failed" in warning
+
+
+def test_fallback_supports_plan_count_keys():
+    text, warning = architecture.render_architecture(
+        {
+            "repo_name": "demo",
+            "counts": {
+                "chunks": 2,
+                "nodes_symbol": 3,
+                "edges_symbol": 4,
+                "nodes_block": 5,
+                "edges_flow": 6,
+                "clusters": 7,
+            },
+        },
+        BrokenWriter(),
+    )
+
+    assert warning is not None
+    assert "Chunks: 2" in text
+    assert "Symbol nodes: 3" in text
+    assert "Symbol edges: 4" in text
+    assert "Flow nodes: 5" in text
+    assert "Flow edges: 6" in text

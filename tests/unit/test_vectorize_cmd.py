@@ -119,6 +119,73 @@ def test_vectorize_propagates_pagerank_warnings(tmp_home, source_repo, monkeypat
     assert "pagerank failed to converge; using uniform scores" in manifest["warnings"]
 
 
+def test_vectorize_treats_architecture_write_failure_as_non_critical(
+    tmp_home,
+    source_repo,
+    monkeypatch,
+    capsys,
+):
+    original_write_text = Path.write_text
+
+    def fail_architecture_write(self, *args, **kwargs):
+        if self.name == "ARCHITECTURE.md":
+            raise OSError("readonly artifact path")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_architecture_write)
+
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+    rc = vec_cmd.run(ns)
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+    manifest = json.loads((paths.repo_dir("upstream") / "manifest.json").read_text())
+
+    assert rc == 0
+    assert any("ARCHITECTURE.md generation failed" in warning for warning in blob["warnings"])
+    assert any("ARCHITECTURE.md generation failed" in warning for warning in manifest["warnings"])
+
+
+def test_vectorize_persists_bench_failure_warning_to_manifest(
+    tmp_home,
+    source_repo,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(
+        vec_cmd.bench_cmd,
+        "run_bench",
+        lambda repo, emit=False: (
+            2,
+            {
+                "repo": repo,
+                "mrr_at_10": 0.0,
+                "ndcg_at_10": 0.0,
+                "recall_at_5": 0.0,
+                "recall_at_10": 0.0,
+                "queries": 0,
+            },
+            "bad benchmark row",
+        ),
+    )
+
+    ns = argparse.Namespace(
+        source=str(source_repo),
+        output_dir=None,
+        max_file_mb=1.5,
+        bench=True,
+    )
+    rc = vec_cmd.run(ns)
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+    manifest = json.loads((paths.repo_dir("upstream") / "manifest.json").read_text())
+
+    assert rc == 0
+    assert "bench failed: bad benchmark row" in blob["warnings"]
+    assert "bench failed: bad benchmark row" in manifest["warnings"]
+
+
 def test_vectorize_populates_symbol_trigrams(tmp_home, source_repo):
     ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
     vec_cmd.run(ns)
