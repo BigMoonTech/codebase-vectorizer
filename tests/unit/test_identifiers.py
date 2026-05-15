@@ -19,8 +19,18 @@ def test_extract_identifiers_splits_common_code_names():
     }
 
 
+def test_extract_identifiers_includes_standalone_two_character_symbols():
+    text = "id db fs io os ui _ __ ___ a"
+    assert identifiers.extract_identifiers(text) == {"id", "db", "fs", "io", "os", "ui"}
+
+
 def test_trigrams_pad_and_lowercase():
     assert identifiers.trigrams("Auth") == {"  a", " au", "aut", "uth", "th "}
+
+
+def test_trigrams_ignore_empty_and_blank_symbols():
+    assert identifiers.trigrams("") == set()
+    assert identifiers.trigrams("   ") == set()
 
 
 def test_symbol_rows_count_occurrences_by_chunk():

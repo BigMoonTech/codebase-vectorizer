@@ -30,7 +30,12 @@ def source_repo(tmp_home):
     src = tmp_home / "upstream"
     src.mkdir()
     (src / "main.py").write_text("def main():\n    print('hello')\n")
-    (src / "lib.py").write_text("def helper(x):\n    return x * 2\n")
+    (src / "lib.py").write_text(
+        "def helper(x):\n"
+        "    helper_value = helper(x)\n"
+        "    id = db\n"
+        "    return helper_value\n"
+    )
     (src / "README.md").write_text("# upstream\n\nThis is a test repo.\n")
     return src
 
@@ -85,9 +90,15 @@ def test_vectorize_populates_symbol_trigrams(tmp_home, source_repo):
     conn = db.open_db(paths.repo_dir("upstream") / "index.sqlite")
     try:
         row = conn.execute(
-            "SELECT COUNT(*) FROM symbol_trigrams WHERE symbol = 'helper'"
+            "SELECT SUM(occurrences) FROM symbol_trigrams "
+            "WHERE trigram = 'hel' AND symbol = 'helper'"
         ).fetchone()
-        assert row[0] > 0
+        assert row[0] == 4
+        row = conn.execute(
+            "SELECT SUM(occurrences) FROM symbol_trigrams "
+            "WHERE trigram = ' db' AND symbol = 'db'"
+        ).fetchone()
+        assert row[0] == 1
     finally:
         conn.close()
 

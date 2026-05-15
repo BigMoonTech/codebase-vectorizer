@@ -2,20 +2,19 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Set
+from typing import Iterable, Set
 
-IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
 CAMEL_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+[0-9]*|[0-9]+")
 
 
 def extract_identifiers(text: str) -> Set[str]:
-    found: set[str] = set()
-    for match in IDENT_RE.finditer(text):
-        found.update(_symbols_for_token(match.group(0)))
-    return found
+    return set(_iter_symbols(text))
 
 
 def trigrams(symbol: str) -> set[str]:
+    if not symbol.strip():
+        return set()
     s = f"  {symbol.lower()} "
     if len(s) < 3:
         return set()
@@ -24,22 +23,30 @@ def trigrams(symbol: str) -> set[str]:
 
 def symbol_trigram_rows(chunk_id: int, content: str) -> list[tuple[str, int, str, int]]:
     counts: dict[tuple[str, str], int] = defaultdict(int)
-    for match in IDENT_RE.finditer(content):
-        for symbol in _symbols_for_token(match.group(0)):
-            for gram in trigrams(symbol):
-                counts[(gram, symbol)] += 1
+    for symbol in _iter_symbols(content):
+        for gram in trigrams(symbol):
+            counts[(gram, symbol)] += 1
     return [
         (gram, chunk_id, symbol, occurrences)
         for (gram, symbol), occurrences in sorted(counts.items())
     ]
 
 
+def _iter_symbols(text: str) -> Iterable[str]:
+    for match in IDENT_RE.finditer(text):
+        yield from _symbols_for_token(match.group(0))
+
+
 def _symbols_for_token(token: str) -> set[str]:
-    symbols = {token}
+    symbols = {token} if _is_symbol_candidate(token) else set()
     for part in token.split("_"):
-        if len(part) >= 2:
+        if _is_symbol_candidate(part):
             symbols.add(part)
         for camel in CAMEL_RE.findall(part):
-            if len(camel) >= 2:
+            if _is_symbol_candidate(camel):
                 symbols.add(camel)
     return symbols
+
+
+def _is_symbol_candidate(symbol: str) -> bool:
+    return len(symbol) >= 2 and bool(symbol.strip("_"))
