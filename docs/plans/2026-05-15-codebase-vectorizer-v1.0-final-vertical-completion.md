@@ -1958,7 +1958,7 @@ This task must implement the spec's artifact path. `ARCHITECTURE.md` is a one-pa
 - Create: `tests/unit/test_architecture.py`
 - Create: `tests/unit/test_bench.py`
 
-- [ ] **Step 1: Implement architecture writer tests**
+- [x] **Step 1: Implement architecture writer tests**
 
 Create `tests/unit/test_architecture.py`:
 
@@ -1993,7 +1993,7 @@ def test_architecture_fallback_warns():
     assert "LLM architecture generation failed" in warning
 ```
 
-- [ ] **Step 2: Implement one-pass LLM architecture writer**
+- [x] **Step 2: Implement one-pass LLM architecture writer**
 
 Create `scripts/cbv/architecture.py`:
 
@@ -2045,7 +2045,7 @@ def render_architecture(payload: dict, writer: ArchitectureWriter) -> tuple[str,
         return _fallback(payload), f"LLM architecture generation failed; used deterministic fallback: {e}"
 ```
 
-- [ ] **Step 3: Implement bench tests**
+- [x] **Step 3: Implement bench tests**
 
 Create `tests/unit/test_bench.py`:
 
@@ -2063,7 +2063,7 @@ def test_metrics_include_mrr_ndcg_and_recall():
     assert "recall_at_10" in metrics
 ```
 
-- [ ] **Step 4: Implement bench helpers**
+- [x] **Step 4: Implement bench helpers**
 
 Create `scripts/cbv/bench.py`:
 
@@ -2105,7 +2105,7 @@ def metrics_for_query(expected: set[str], actual: list[str]) -> dict[str, float]
     }
 ```
 
-- [ ] **Step 5: Add `bench` CLI**
+- [x] **Step 5: Add `bench` CLI**
 
 `bench <repo>` reads `bench/coir_subset.jsonl`, `bench/repoeval_mini.jsonl`, and any repo-local `bench/queries.jsonl` when present. It runs each query through the full pipeline, writes `bench/results.json`, and prints:
 
@@ -2119,11 +2119,11 @@ Each JSONL row uses:
 {"query":"authenticate user","expected_files":["pkg/auth.py"]}
 ```
 
-- [ ] **Step 6: Wire vectorize optional artifacts**
+- [x] **Step 6: Wire vectorize optional artifacts**
 
 After vectorize completes, build an architecture payload from `manifest.json`, cluster summaries, top PageRank nodes, and up to 10 pivotal files. Write `ARCHITECTURE.md` using `architecture.render_architecture(payload, writer=LocalLLMArchitectureWriter())`; if fallback is used, append the warning to `manifest.warnings[]`. If `--bench` is added to the parser and passed, run the bench command and include results in summary `bench_results`.
 
-- [ ] **Step 7: Verify and commit**
+- [x] **Step 7: Verify and commit**
 
 Run:
 

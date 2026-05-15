@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation commit: `d64d7ac fix ppr convergence fallback scoring`
+- Latest confirmed implementation commit: `a68e057 fix task 12 benchmark and artifact edge cases`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -74,6 +74,11 @@
   - `280d248 slice 7 t2: respect embedder metadata on cluster fast path`
   - `abc28d5 slice 7 t2: guard cluster freshness and centroid metadata`
   - `d64d7ac fix ppr convergence fallback scoring`
+  - `70f9fcc slice 7 t3: write architecture summary and bench results`
+  - `403f96c fix task 12 artifact warning handling`
+  - `a68e057 fix task 12 benchmark and artifact edge cases`
+  - `e059a76 fix task 12 integration warning expectation`
+  - `08cf5cc fix task 12 incremental warning expectation`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -82,7 +87,7 @@
 
 ## Current Working State
 
-This handoff was updated after Task 11 approval:
+This handoff was updated after Task 12 approval:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
@@ -98,6 +103,7 @@ This handoff was updated after Task 11 approval:
 - Task 10 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 10A is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 11 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 12 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -248,11 +254,24 @@ This handoff was updated after Task 11 approval:
   - Current no-op cluster indexes, including zero-cluster all-noise results, skip embedder loading when configured metadata still matches; metadata changes still trigger safe rebuild.
   - `relate concept-cluster` searches label substrings first with escaped LIKE wildcards, then nearest centroids only when configured and actual embedder metadata match the index.
   - The full-suite NetworkX 3.6.1 convergence regression is fixed in `d64d7ac`: PPR convergence fallback now uses the internal weighted PageRank implementation instead of flattening to seed scores.
+- Task 12 landed across:
+  - `70f9fcc slice 7 t3: write architecture summary and bench results`
+  - `403f96c fix task 12 artifact warning handling`
+  - `a68e057 fix task 12 benchmark and artifact edge cases`
+  - `e059a76 fix task 12 integration warning expectation`
+  - `08cf5cc fix task 12 incremental warning expectation`
+- Task 12 review fixes include:
+  - `scripts/cbv/architecture.py` adds `ArchitectureWriter`, `LocalLLMArchitectureWriter`, `CBV_ARCHITECTURE_COMMAND`, `CBV_ARCHITECTURE_TIMEOUT_SECONDS`, deterministic fallback markdown, and warning-backed fallback through `render_architecture`.
+  - `vectorize` writes `ARCHITECTURE.md` from index counts, cluster summaries, top PageRank nodes, and pivotal files; architecture render/write failures remain non-critical and persist warnings into manifest and summary.
+  - `scripts/cbv/bench.py` provides `MRR@10`, `NDCG@10`, `Recall@5`, and `Recall@10` helpers; `bench <repo>` reads CoIR/RepoEval-style JSONL inputs, runs full-lane queries, writes `bench/results.json`, and prints aggregate summary JSON.
+  - Benchmark scoring collapses chunk-level query rows to first-seen unique file rankings before computing file-level metrics.
+  - `vectorize --bench` runs the benchmark path, includes `bench_results` in the final summary, and converts benchmark failures into manifest/summary warnings.
+  - Shared benchmark query discovery now checks both caller cwd and the project-root `bench/` directory, plus repo-local query files.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Task 12: architecture document and bench command.
+- Next action is Task 13: update README and skill docs to match final behavior.
 
 ## Verified Baseline
 
@@ -329,6 +348,12 @@ Latest verification in the current session:
 - Task 11 whitespace check: `git diff --check 8ee711c..HEAD` reported no issues.
 - Task 11 final spec re-review approved with no findings.
 - Task 11 final code-quality re-review approved with no blocking findings.
+- Task 12 required/focused verification after benchmark/artifact fixes: `45 passed`.
+- Task 12 integration regression for full index/query/relate paths: `56 passed`.
+- Task 12 full-suite regression after warning-expectation updates: `453 passed, 1 skipped`.
+- Task 12 whitespace check: `git diff --check e31db83..HEAD` reported no issues.
+- Task 12 final spec review approved with no findings.
+- Task 12 final code-quality re-review approved with no blocking findings.
 
 ## What Exists Today
 
@@ -368,6 +393,8 @@ Current Slice 3/Milestone 1 work adds:
 - Merkle incremental indexing with `vectorize --update`, safe Merkle backfill, retryable chunk failures, and transactional update writes.
 - Spec-complete Task 10A intra-procedural flow indexing with block nodes, `controls`/`guards`/`dataflow` edges, vectorize flow counts, Tier-A best-effort tree-sitter coverage, and semantic flow relate JSON.
 - Spec-aligned concept clusters using UMAP + HDBSCAN, stored centroids, soft chunk memberships, configurable LLM labels with warning-backed deterministic fallback, safe incremental cluster refresh, and `relate concept-cluster`.
+- `ARCHITECTURE.md` generation after vectorize with configurable local LLM command, deterministic warning-backed fallback, and non-critical artifact failure handling.
+- `bench <repo>` and optional `vectorize --bench`, with CoIR/RepoEval-style JSONL inputs, file-level MRR@10/NDCG@10/Recall@5/Recall@10 scoring, `bench/results.json`, and summary `bench_results`.
 
 Important implementation detail:
 
@@ -383,9 +410,7 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces still to implement:
 
-1. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
-2. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
-3. README and skill docs aligned to final behavior.
+1. README and skill docs aligned to final behavior.
 
 ## Completion Tracking Rule
 
@@ -411,12 +436,11 @@ User requested:
 
 Recommended next action:
 
-1. Begin Task 12 for `ARCHITECTURE.md` and the bench command.
-2. After Task 12 implementation, verification, and review pass, mark Task 12 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
-3. Continue with the remaining README and skill-doc tasks.
+1. Begin Task 13 for README and skill-doc updates.
+2. After Task 13 implementation, verification, and review pass, mark Task 13 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Run Task 14's final full verification gate before calling v1.0 code-complete.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
-6. Run the final full verification gate before calling v1.0 code-complete.
 
 ## Do Not Drift
 
