@@ -38,11 +38,14 @@ _TS_FUNCTION_TYPES = frozenset(
         "singleton_method",
     }
 )
+_TS_ASSIGNED_FUNCTION_TYPES = frozenset(("arrow_function", "function_expression"))
 _TS_CLASS_TYPES = frozenset(
     {
         "class_declaration",
         "class_definition",
         "class",
+        "class_specifier",
+        "struct_specifier",
         "type_declaration",
         "struct_item",
     }
@@ -555,6 +558,15 @@ def _ts_function_defs(root, file_path: str, source: bytes) -> list[tuple[object,
                 if child.is_named:
                     visit(child, next_parent)
             return
+        assigned = _ts_assigned_function(node, source)
+        if assigned is not None:
+            fn_node, short_name = assigned
+            symbol = f"{parent_symbol}::{short_name}"
+            definitions.append((fn_node, symbol))
+            for child in fn_node.children:
+                if child.is_named:
+                    visit(child, symbol)
+            return
         if node.type in _TS_FUNCTION_TYPES:
             short_name = _ts_definition_name(node, source)
             if short_name:
@@ -570,6 +582,23 @@ def _ts_function_defs(root, file_path: str, source: bytes) -> list[tuple[object,
 
     visit(root, file_path)
     return definitions
+
+
+def _ts_assigned_function(node, source: bytes) -> tuple[object, str] | None:
+    if node.type != "variable_declarator":
+        return None
+    name_node = node.child_by_field_name("name")
+    value_node = node.child_by_field_name("value")
+    if (
+        name_node is None
+        or value_node is None
+        or value_node.type not in _TS_ASSIGNED_FUNCTION_TYPES
+    ):
+        return None
+    short_name = _ts_last_name_part(_ts_text(name_node, source))
+    if not short_name:
+        return None
+    return value_node, short_name
 
 
 def _ts_definition_name(node, source: bytes) -> str | None:

@@ -73,6 +73,43 @@ RUBY_BRANCH_LOOP_SOURCE = (
     "  value\n"
     "end\n"
 )
+JS_ASSIGNED_SOURCE = (
+    "const decide = (flag) => {\n"
+    "  let approved = false;\n"
+    "  if (flag) {\n"
+    "    approved = true;\n"
+    "  }\n"
+    "  return approved;\n"
+    "};\n"
+    "const other = function(flag) {\n"
+    "  let approved = false;\n"
+    "  if (flag) {\n"
+    "    approved = true;\n"
+    "  }\n"
+    "  return approved;\n"
+    "};\n"
+)
+TS_ASSIGNED_SOURCE = (
+    "const decide = (flag: boolean): boolean => {\n"
+    "  let approved = false;\n"
+    "  if (flag) {\n"
+    "    approved = true;\n"
+    "  }\n"
+    "  return approved;\n"
+    "};\n"
+)
+CPP_METHOD_SOURCE = (
+    "class Runner {\n"
+    "public:\n"
+    "  int run(bool flag) {\n"
+    "    int value = 0;\n"
+    "    if (flag) {\n"
+    "      value = 1;\n"
+    "    }\n"
+    "    return value;\n"
+    "  }\n"
+    "};\n"
+)
 
 
 def _extract_fixture():
@@ -134,6 +171,36 @@ def test_tier_a_flow_extractors_do_not_fail_and_emit_blocks(language, filename, 
     nodes, edges = flow.extract_flow(language, filename, source)
 
     assert nodes
+    assert any(edge.kind == "controls" for edge in edges)
+
+
+def test_javascript_flow_extracts_assigned_arrow_and_function_expression():
+    nodes, edges = flow.extract_flow("javascript", "assigned.js", JS_ASSIGNED_SOURCE)
+
+    parent_symbols = {node.parent_symbol for node in nodes}
+    assert "assigned.js::decide" in parent_symbols
+    assert "assigned.js::other" in parent_symbols
+    assert any(edge.kind == "controls" for edge in edges)
+    assert any(edge.kind == "guards" and "flag" in (edge.metadata or "") for edge in edges)
+    assert any(edge.kind == "dataflow" and '"variable": "approved"' in (edge.metadata or "") for edge in edges)
+
+
+def test_typescript_flow_extracts_assigned_arrow_function():
+    nodes, edges = flow.extract_flow("typescript", "assigned.ts", TS_ASSIGNED_SOURCE)
+
+    parent_symbols = {node.parent_symbol for node in nodes}
+    assert "assigned.ts::decide" in parent_symbols
+    assert any(edge.kind == "controls" for edge in edges)
+    assert any(edge.kind == "guards" and "flag" in (edge.metadata or "") for edge in edges)
+    assert any(edge.kind == "dataflow" and '"variable": "approved"' in (edge.metadata or "") for edge in edges)
+
+
+def test_cpp_flow_uses_class_scoped_method_parent_symbol():
+    nodes, edges = flow.extract_flow("cpp", "flow.cpp", CPP_METHOD_SOURCE)
+
+    parent_symbols = {node.parent_symbol for node in nodes}
+    assert "flow.cpp::Runner::run" in parent_symbols
+    assert "flow.cpp::run" not in parent_symbols
     assert any(edge.kind == "controls" for edge in edges)
 
 

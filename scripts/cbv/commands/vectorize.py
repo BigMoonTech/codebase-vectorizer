@@ -636,9 +636,11 @@ def _write_flow_graph(
 
         flow_node_ids: dict[str, int] = {}
         file_chunks = chunks_by_file.get(rel_file_path, [])
+        skipped_missing_parent = 0
         for node in flow_nodes:
             parent_id = function_ids.get(node.parent_symbol)
             if parent_id is None:
+                skipped_missing_parent += 1
                 continue
             cur = conn.execute(
                 "INSERT INTO nodes (kind, name, short_name, file_path, start_line, "
@@ -656,6 +658,15 @@ def _write_flow_graph(
                 ),
             )
             flow_node_ids[node.name] = int(cur.lastrowid)
+        if skipped_missing_parent and _file_has_indexed_functions(
+            rel_file_path,
+            function_ids,
+        ):
+            symbol_label = "symbol" if skipped_missing_parent == 1 else "symbols"
+            warnings.append(
+                f"flow nodes skipped for {rel_file_path}: "
+                f"{skipped_missing_parent} missing parent {symbol_label}"
+            )
 
         edge_metadata: dict[tuple[int, int, str], list[str | None]] = {}
         for edge in flow_edges:
