@@ -355,6 +355,66 @@ def test_cast_chunks_hidden_trivia_gap_does_not_blow_semantic_budget():
     assert any(chunk.kind == "function" and chunk.name == "b" for chunk in chunks)
 
 
+def test_cast_chunks_leading_root_trivia_does_not_blow_semantic_budget():
+    src = (b"\n" * 3000) + b"def a():\n    return 1\n"
+
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src),
+        src,
+        language_name="python",
+        file_path="x.py",
+        budget_bytes=1500,
+    )
+
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == src
+    assert chunks[0].start_byte == 0
+    assert chunks[-1].end_byte == len(src)
+    for left, right in zip(chunks, chunks[1:]):
+        assert left.end_byte == right.start_byte
+
+    assert chunks[0].kind == "section"
+    assert chunks[0].content.strip() == ""
+    function_chunks = [
+        chunk
+        for chunk in chunks
+        if chunk.kind == "function" and chunk.name == "a"
+    ]
+    assert function_chunks, chunks
+    for chunk in function_chunks:
+        assert len(chunk.content.encode("utf-8")) <= 1500
+        assert chunk.start_byte != 0
+
+
+def test_cast_chunks_trailing_root_trivia_does_not_blow_semantic_budget():
+    src = b"def a():\n    return 1\n" + (b"\n" * 3000)
+
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src),
+        src,
+        language_name="python",
+        file_path="x.py",
+        budget_bytes=1500,
+    )
+
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == src
+    assert chunks[0].start_byte == 0
+    assert chunks[-1].end_byte == len(src)
+    for left, right in zip(chunks, chunks[1:]):
+        assert left.end_byte == right.start_byte
+
+    assert chunks[-1].kind == "section"
+    assert chunks[-1].content.strip() == ""
+    function_chunks = [
+        chunk
+        for chunk in chunks
+        if chunk.kind == "function" and chunk.name == "a"
+    ]
+    assert function_chunks, chunks
+    for chunk in function_chunks:
+        assert len(chunk.content.encode("utf-8")) <= 1500
+        assert chunk.end_byte != len(src)
+
+
 def test_cast_chunks_single_function_under_budget_is_one_chunk():
     src = b"def foo():\n    return 42\n"
     chunks = cast_chunker.cast_chunks(
@@ -672,6 +732,9 @@ def test_common_javascript_typescript_function_forms_are_functions(
         ("javascript", b"const f = () => 1;\n", "f"),
         ("javascript", b"const f = function () { return 1; };\n", "f"),
         ("tsx", b"const Component = () => <div />;\n", "Component"),
+        ("javascript", b"obj.f = () => 1;\n", "f"),
+        ("javascript", b"exports.f = function () { return 1; };\n", "f"),
+        ("javascript", b"const f = (() => 1);\n", "f"),
     ],
 )
 def test_assigned_function_chunks_use_declarator_name(

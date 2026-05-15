@@ -106,11 +106,50 @@ def _extract_identifier_text(node, source: bytes) -> Optional[str]:
         return None
 
 
+def _direct_function_value_matches(value_node, function_node) -> bool:
+    if _same_node(value_node, function_node):
+        return True
+
+    current = value_node
+    while current is not None and current.type == "parenthesized_expression":
+        named_children = [child for child in current.children if child.is_named]
+        if len(named_children) != 1:
+            return False
+        child = named_children[0]
+        if _same_node(child, function_node):
+            return True
+        current = child
+
+    return False
+
+
+def _extract_js_assignment_left_name(left_node, source: bytes) -> Optional[str]:
+    if left_node is None:
+        return None
+
+    direct_name = _extract_identifier_text(left_node, source)
+    if direct_name is not None:
+        return direct_name
+
+    if left_node.type == "member_expression":
+        property_node = left_node.child_by_field_name("property")
+        property_name = _extract_identifier_text(property_node, source)
+        if property_name is not None:
+            return property_name
+
+        for child in reversed(left_node.children):
+            child_name = _extract_identifier_text(child, source)
+            if child_name is not None:
+                return child_name
+
+    return None
+
+
 def _extract_js_assigned_function_name(node, parents, source: bytes) -> Optional[str]:
     for parent in reversed(parents):
         if parent.type == "variable_declarator":
             value = parent.child_by_field_name("value")
-            if _same_node(value, node):
+            if _direct_function_value_matches(value, node):
                 return _extract_identifier_text(
                     parent.child_by_field_name("name"),
                     source,
@@ -118,8 +157,8 @@ def _extract_js_assigned_function_name(node, parents, source: bytes) -> Optional
 
         if parent.type == "assignment_expression":
             right = parent.child_by_field_name("right")
-            if _same_node(right, node):
-                return _extract_identifier_text(
+            if _direct_function_value_matches(right, node):
+                return _extract_js_assignment_left_name(
                     parent.child_by_field_name("left"),
                     source,
                 )
@@ -549,13 +588,13 @@ def _cast_root(root, *, source: bytes, budget: int, language_name: str) -> List[
 
     tiled = _slots_with_explicit_gaps(
         out,
-        root.start_byte,
-        root.end_byte,
+        0,
+        len(source),
         parents,
         budget,
     )
     merged = _greedy_merge_slots(tiled, budget, language_name)
-    _tile_slots_to_range(merged, root.start_byte, root.end_byte)
+    _tile_slots_to_range(merged, 0, len(source))
     return merged
 
 
