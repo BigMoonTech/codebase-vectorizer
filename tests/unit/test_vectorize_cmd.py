@@ -140,6 +140,25 @@ def test_vectorize_preserves_file_nodes_and_warns_when_symbol_parse_fails(
     )
 
 
+def test_vectorize_creates_file_node_for_empty_indexable_file(tmp_home, source_repo):
+    (source_repo / "empty.py").write_text("")
+
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+    vec_cmd.run(ns)
+
+    from cbv import db
+    conn = db.open_db(paths.repo_dir("upstream") / "index.sqlite")
+    rows = conn.execute(
+        "SELECT kind, name, short_name, chunk_id FROM nodes WHERE name = 'empty.py'"
+    ).fetchall()
+    chunk_rows = conn.execute(
+        "SELECT id FROM chunks WHERE file_path = 'empty.py'"
+    ).fetchall()
+
+    assert chunk_rows == []
+    assert rows == [("file", "empty.py", "empty.py", None)]
+
+
 def test_vectorize_writes_meta(tmp_home, source_repo):
     ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
     vec_cmd.run(ns)

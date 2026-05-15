@@ -69,10 +69,13 @@ def run(ns: argparse.Namespace) -> int:
 
     # Step 3+4: walk and chunk.
     chunks_buf: list[chunker.Chunk] = []
+    source_files: list[tuple[str, str]] = []
     file_count = 0
     warnings: list[str] = []
     for entry in walker.walk(src_dir, max_file_mb=ns.max_file_mb):
         file_count += 1
+        rel_file_path = entry.relpath.as_posix()
+        source_files.append((rel_file_path, chunker.detect_language(entry.abspath)))
         try:
             file_chunks = list(chunker.chunk_file(entry.abspath))
         except Exception as e:  # broad: per-file failure must not kill the run
@@ -81,7 +84,7 @@ def run(ns: argparse.Namespace) -> int:
         # rewrite file_path to be repo-relative for storage
         for c in file_chunks:
             chunks_buf.append(chunker.Chunk(
-                file_path=entry.relpath.as_posix(),
+                file_path=rel_file_path,
                 language=c.language, kind=c.kind, name=c.name,
                 ast_path=c.ast_path, start_line=c.start_line,
                 end_line=c.end_line, start_byte=c.start_byte,
@@ -130,6 +133,7 @@ def run(ns: argparse.Namespace) -> int:
     nodes_symbol, edges_symbol = _write_symbol_graph(
         conn,
         src_dir,
+        source_files,
         chunks_buf,
         chunk_ids,
         warnings,
@@ -188,6 +192,7 @@ def _embed_in_batches(emb: embedder.Embedder, texts: List[str], batch: int):
 def _write_symbol_graph(
     conn,
     src_dir: Path,
+    source_files: list[tuple[str, str]],
     chunks_buf: list[chunker.Chunk],
     chunk_ids: list[int],
     warnings: list[str],
@@ -200,8 +205,8 @@ def _write_symbol_graph(
 
     all_nodes: list[symbols.SymbolNode] = []
     all_edges: list[symbols.SymbolEdge] = []
-    for rel_file_path, file_chunks in sorted(chunks_by_file.items()):
-        language = file_chunks[0][3]
+    for rel_file_path, language in sorted(source_files):
+        file_chunks = chunks_by_file.get(rel_file_path, [])
         language_meta = parser.language_for_name(language)
         source_bytes = b""
 
