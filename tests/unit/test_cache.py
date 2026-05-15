@@ -70,6 +70,48 @@ def test_same_content_hash_can_store_separate_model_embeddings(tmp_path):
     assert rows == 2
 
 
+def test_open_cache_migrates_stale_content_hash_primary_key_schema(tmp_path):
+    cache_path = tmp_path / "embedding_cache.sqlite"
+    stale_conn = sqlite3.connect(cache_path)
+    try:
+        stale_conn.execute(
+            "CREATE TABLE embedding_cache ("
+            "content_hash TEXT PRIMARY KEY, "
+            "embedding BLOB NOT NULL, "
+            "model_id TEXT NOT NULL, "
+            "created_at INTEGER NOT NULL)"
+        )
+        stale_conn.execute(
+            "INSERT INTO embedding_cache "
+            "(content_hash, embedding, model_id, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("hash-a", np.array([1, 2, 3], dtype=np.int8).tobytes(), "model-a", 1),
+        )
+        stale_conn.commit()
+    finally:
+        stale_conn.close()
+
+    conn = cache.open_cache(cache_path)
+    model_b_embedding = np.array([4, 5, 6], dtype=np.int8)
+    try:
+        cache.put(conn, "hash-a", "model-b", model_b_embedding)
+        conn.commit()
+
+        np.testing.assert_array_equal(
+            cache.get(conn, "hash-a", "model-a"),
+            np.array([1, 2, 3], dtype=np.int8),
+        )
+        np.testing.assert_array_equal(
+            cache.get(conn, "hash-a", "model-b"),
+            model_b_embedding,
+        )
+        rows = conn.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert rows == 2
+
+
 def test_put_updates_existing_content_hash_and_model(tmp_path):
     conn = cache.open_cache(tmp_path / "embedding_cache.sqlite")
     try:
