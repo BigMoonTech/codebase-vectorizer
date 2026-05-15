@@ -89,6 +89,7 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
             "function_declaration",
             "function_expression",
             "arrow_function",
+            "generator_function",
             "generator_function_declaration",
             "method_definition",
         )
@@ -99,6 +100,7 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
             "function_declaration",
             "function_expression",
             "arrow_function",
+            "generator_function",
             "generator_function_declaration",
             "method_definition",
             "method_signature",
@@ -112,6 +114,7 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
             "function_declaration",
             "function_expression",
             "arrow_function",
+            "generator_function",
             "generator_function_declaration",
             "method_definition",
             "method_signature",
@@ -209,6 +212,47 @@ def _kind_for_node(language: str, node, parents) -> str:
         return "function"
 
     return "section"
+
+
+LABELLED_KINDS = frozenset(("function", "class", "method"))
+
+
+def _semantic_representative(language: str, node, parents):
+    """Return a mapped node to represent this range when there is a clear one."""
+    if _kind_for_node(language, node, parents) in LABELLED_KINDS:
+        return node, parents
+
+    matches = []
+
+    def visit(candidate, candidate_parents) -> None:
+        if _kind_for_node(language, candidate, candidate_parents) in LABELLED_KINDS:
+            matches.append((candidate, candidate_parents))
+            return
+        for child in candidate.children:
+            if child.end_byte > child.start_byte:
+                visit(child, candidate_parents + [candidate])
+
+    for child in node.children:
+        if child.end_byte > child.start_byte:
+            visit(child, parents + [node])
+
+    if len(matches) == 1:
+        return matches[0]
+    return node, parents
+
+
+def _slot_for_node(node, parents, language_name: str) -> "_Slot":
+    representative_node, representative_parents = _semantic_representative(
+        language_name,
+        node,
+        list(parents),
+    )
+    return _Slot(
+        node.start_byte,
+        node.end_byte,
+        representative_node,
+        list(representative_parents),
+    )
 
 
 def _inner_decorated_definition(node):
@@ -432,9 +476,9 @@ def _cast_root(root, *, source: bytes, budget: int, language_name: str) -> List[
                 )
             )
         else:
-            out.append(_Slot(child.start_byte, child.end_byte, child, list(parents)))
+            out.append(_slot_for_node(child, parents, language_name))
 
-    merged = _greedy_merge_slots(out, budget)
+    merged = _greedy_merge_slots(out, budget, language_name)
     _tile_slots_to_range(merged, root.start_byte, root.end_byte)
     return merged
 
@@ -443,11 +487,11 @@ def _cast(node, *, parents, source: bytes, budget: int, language_name: str) -> L
     """Recursive split-then-merge for one non-root node."""
     size = node.end_byte - node.start_byte
     if size <= budget:
-        return [_Slot(node.start_byte, node.end_byte, node, list(parents))]
+        return [_slot_for_node(node, parents, language_name)]
 
     children = [c for c in node.children if c.end_byte > c.start_byte]
     if not children:
-        return [_Slot(node.start_byte, node.end_byte, node, list(parents))]
+        return [_slot_for_node(node, parents, language_name)]
 
     next_parents = list(parents) + [node]
     out: List[_Slot] = []
@@ -463,14 +507,14 @@ def _cast(node, *, parents, source: bytes, budget: int, language_name: str) -> L
                 )
             )
         else:
-            out.append(_Slot(child.start_byte, child.end_byte, child, list(next_parents)))
+            out.append(_slot_for_node(child, next_parents, language_name))
 
-    merged = _greedy_merge_slots(out, budget)
+    merged = _greedy_merge_slots(out, budget, language_name)
     _tile_slots_to_range(merged, node.start_byte, node.end_byte)
     return merged
 
 
-def _greedy_merge_slots(slots: List[_Slot], budget: int) -> List[_Slot]:
+def _greedy_merge_slots(slots: List[_Slot], budget: int, language_name: str) -> List[_Slot]:
     """Merge consecutive slots while the combined byte range fits budget."""
     out: List[_Slot] = []
     current: Optional[_Slot] = None
@@ -486,9 +530,10 @@ def _greedy_merge_slots(slots: List[_Slot], budget: int) -> List[_Slot]:
             continue
 
         if slot.end_byte - current.start_byte <= budget:
+            node, parents = _merged_representative(current, slot, language_name)
             current.end_byte = slot.end_byte
-            current.node = None
-            current.parents = _common_parent_stack(current.parents, slot.parents)
+            current.node = node
+            current.parents = parents
         else:
             out.append(current)
             current = _Slot(
@@ -501,6 +546,26 @@ def _greedy_merge_slots(slots: List[_Slot], budget: int) -> List[_Slot]:
     if current is not None:
         out.append(current)
     return out
+
+
+def _slot_semantic_kind(slot: _Slot, language_name: str) -> Optional[str]:
+    if slot.node is None:
+        return None
+    kind = _kind_for_node(language_name, slot.node, slot.parents)
+    if kind in LABELLED_KINDS:
+        return kind
+    return None
+
+
+def _merged_representative(left: _Slot, right: _Slot, language_name: str):
+    left_kind = _slot_semantic_kind(left, language_name)
+    right_kind = _slot_semantic_kind(right, language_name)
+
+    if left_kind and not right_kind:
+        return left.node, list(left.parents)
+    if right_kind and not left_kind:
+        return right.node, list(right.parents)
+    return None, _common_parent_stack(left.parents, right.parents)
 
 
 def _common_parent_stack(left, right) -> List[object]:

@@ -697,3 +697,31 @@ def test_kind_mapping_planned_node_types(
     node, parents = _find_first_node_with_parents(tree.root_node, node_type)
 
     assert cast_chunker._kind_for_node(language_name, node, parents) == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "expected_kind"),
+    [
+        ("c", b"struct C { int x; };\n", "class"),
+        ("cpp", b"struct C { int x; };\n", "class"),
+        ("javascript", b"class C {};\n", "class"),
+        ("typescript", b"interface I { m(): void; }\n", "class"),
+        ("javascript", b"const f = () => 1;\n", "function"),
+        ("javascript", b"const gen = function* () { yield 1; };\n", "function"),
+    ],
+)
+def test_emitted_chunks_preserve_mapped_metadata_through_trivia_merges(
+    language_name,
+    source,
+    expected_kind,
+):
+    tree = _parse_language(language_name, source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=1500,
+    )
+
+    assert any(chunk.kind == expected_kind for chunk in chunks), chunks
