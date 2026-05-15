@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation commit: `601d6b2 slice 5 t1: rerank full chunk content`
+- Latest confirmed implementation commit: `58018e8 slice 6 t1: migrate embedding cache schema`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -41,6 +41,11 @@
   - `b371ffb slice 5 t1: keep fast lane reranker-free`
   - `69ec615 slice 5 t1: harden reranker edge cases`
   - `601d6b2 slice 5 t1: rerank full chunk content`
+  - `e17d633 docs: mark task 7 complete`
+  - `3ef70a2 slice 6 t1: cache embeddings by content hash`
+  - `f2805a3 slice 6 t1: key embedding cache by model`
+  - `0c049a9 slice 6 t1: harden cache vectorize behavior`
+  - `58018e8 slice 6 t1: migrate embedding cache schema`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -49,7 +54,7 @@
 
 ## Current Working State
 
-This handoff was updated after Task 7 approval:
+This handoff was updated after Task 8 approval:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
@@ -60,6 +65,7 @@ This handoff was updated after Task 7 approval:
 - Task 5A is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 6 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 7 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 8 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -128,11 +134,24 @@ This handoff was updated after Task 7 approval:
   - Full lane passes full chunk content to the reranker adapter while JSON output still exposes only capped preview text.
   - Non-stub factory wiring is covered with a fake `sentence_transformers.CrossEncoder` module test.
   - The final spec and code-quality reviewer objections were withdrawn after checking the written plan/spec: empty `meta.reranker_model` sentinel remains index-time compliant, and the 512-character production adapter cap is spec-defined.
+- Task 8 landed across:
+  - `3ef70a2 slice 6 t1: cache embeddings by content hash`
+  - `f2805a3 slice 6 t1: key embedding cache by model`
+  - `0c049a9 slice 6 t1: harden cache vectorize behavior`
+  - `58018e8 slice 6 t1: migrate embedding cache schema`
+- Task 8 review fixes include:
+  - Cross-repo cache lives at `paths.embedding_cache_path()` and stores INT8 embeddings keyed by `(content_hash, model_id)`.
+  - `vectorize` copies cache hits through `db.insert_embedding`, embeds and quantizes misses, writes misses to both `vec_chunks` and cache, and reports `embedding_cache_hit_rate` in summary and manifest.
+  - `vectorize --no-cache` is now parsed and bypasses cache open/read/write.
+  - Wrong-length cached vectors are treated as misses and replaced before sqlite-vec insertion.
+  - The main repo DB and cache DB connections are closed through `finally` paths.
+  - Cache schema migration handles the intermediate `PRIMARY KEY(content_hash)` table and preserves valid rows while rebuilding to `(content_hash, model_id)`.
+  - Duplicate chunk content is counted per chunk for hit-rate semantics while cache storage remains distinct by content hash/model.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Milestone 4 Task 8: content-hash embedding cache.
+- Next action is Milestone 4 Task 9: Merkle file table and incremental update mode.
 
 ## Verified Baseline
 
@@ -181,6 +200,11 @@ Latest verification in the current session:
 - Task 7 whitespace check: `git diff --check f10ed3b..HEAD` reported no issues.
 - Task 7 targeted spec re-review approved with no findings after withdrawing the empty-sentinel metadata objection.
 - Task 7 targeted code-quality re-review approved after withdrawing the spec-defined 512-character reranker cap objection.
+- Task 8 focused verification: `34 passed`.
+- Task 8 full-suite regression: `354 passed, 1 skipped`.
+- Task 8 whitespace check: `git diff --check e17d633..HEAD` reported no issues.
+- Task 8 targeted spec re-review approved with no findings.
+- Task 8 targeted code-quality re-review approved with no findings.
 
 ## What Exists Today
 
@@ -216,6 +240,7 @@ Current Slice 3/Milestone 1 work adds:
 - `codebase-relate` skill documenting caller/callee, neighborhood, path, concept, PageRank, and flow query usage.
 - Cross-encoder reranker adapter with deterministic stub path.
 - Full-lane reranking, query-time `reranker_model`, and low-confidence `refined_queries` hints.
+- Cross-repo content-hash embedding cache with `--no-cache`, hit-rate reporting, wrong-length fallback, and stale-schema migration.
 
 Important implementation detail:
 
@@ -231,13 +256,12 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces still to implement:
 
-1. Content-hash embedding cache.
-2. Merkle incremental indexing.
-3. Intra-procedural CFG/DFG flow edges and useful flow relate results beyond fallback.
-4. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
-5. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
-6. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
-7. README and skill docs aligned to final behavior.
+1. Merkle incremental indexing.
+2. Intra-procedural CFG/DFG flow edges and useful flow relate results beyond fallback.
+3. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
+4. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
+5. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
+6. README and skill docs aligned to final behavior.
 
 ## Completion Tracking Rule
 
@@ -263,9 +287,9 @@ User requested:
 
 Recommended next action:
 
-1. Begin Milestone 4 Task 8 for the content-hash embedding cache.
-2. After Task 8 implementation, verification, and review pass, mark Task 8 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
-3. Continue with Merkle incremental indexing work.
+1. Begin Milestone 4 Task 9 for Merkle file table and incremental update mode.
+2. After Task 9 implementation, verification, and review pass, mark Task 9 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Continue with CFG/DFG flow indexing work.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.

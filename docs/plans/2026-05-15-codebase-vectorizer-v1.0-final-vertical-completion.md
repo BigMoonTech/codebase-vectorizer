@@ -1400,7 +1400,7 @@ This is the main performance-completion milestone. It should preserve the existi
 - Modify: `scripts/cbv/commands/vectorize.py`
 - Modify: `tests/unit/test_vectorize_cmd.py`
 
-- [ ] **Step 1: Implement cache**
+- [x] **Step 1: Implement cache**
 
 Create `scripts/cbv/cache.py`:
 
@@ -1447,7 +1447,7 @@ def put(conn: sqlite3.Connection, content_hash: str, model_id: str, embedding: n
     )
 ```
 
-- [ ] **Step 2: Wire vectorize cache**
+- [x] **Step 2: Wire vectorize cache**
 
 In `vectorize.py`, before embedding, open `paths.embedding_cache_path()` unless a future `--no-cache` flag is set. For each chunk, try `cache.get(content_hash, emb.model_id)`. Embed only misses. Compute:
 
@@ -1457,7 +1457,7 @@ embedding_cache_hit_rate = hits / len(chunks_buf) if chunks_buf else 0.0
 
 Write the hit rate to manifest and summary.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run:
 
