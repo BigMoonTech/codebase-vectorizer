@@ -101,6 +101,7 @@ def run(ns: argparse.Namespace) -> int:
                 source_names=["bm25", "dense", "symbol", "graph", "ppr"],
             )
         candidate_rows = []
+        candidate_passages = []
         for chunk_id, score, sources in fused:
             row = conn.execute(
                 "SELECT file_path, kind, name, start_line, end_line, content "
@@ -110,6 +111,7 @@ def run(ns: argparse.Namespace) -> int:
                 continue
             file_rel, kind, name, sl, el, content = row
             file_abs = (repo_dir / "source" / file_rel).resolve()
+            candidate_passages.append(content)
             candidate_rows.append({
                 "rank": 0,
                 "file_absolute": str(file_abs),
@@ -125,7 +127,7 @@ def run(ns: argparse.Namespace) -> int:
 
         if lane == "full" and candidate_rows:
             rr = reranker.make_reranker()
-            scores = rr.score(ns.question, [row["preview"] for row in candidate_rows])
+            scores = rr.score(ns.question, candidate_passages)
             if len(scores) != len(candidate_rows):
                 print(
                     f"reranker returned {len(scores)} scores for "

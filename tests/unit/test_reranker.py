@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import sys
 
 
 def _reranker_module():
@@ -35,6 +36,33 @@ def test_make_reranker_uses_stub_when_requested(monkeypatch):
     rr = reranker.make_reranker()
 
     assert isinstance(rr, reranker.StubReranker)
+
+
+def test_make_reranker_uses_sentence_transformer_when_not_stubbed(monkeypatch):
+    reranker = _reranker_module()
+    created = []
+
+    class FakeCrossEncoder:
+        def __init__(self, model_id: str) -> None:
+            created.append(model_id)
+
+        def predict(self, pairs):
+            return [0.25 for _ in pairs]
+
+    monkeypatch.delenv("CBV_STUB_RERANKER", raising=False)
+    monkeypatch.delenv("CBV_STUB_EMBEDDER", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        type("FakeSentenceTransformers", (), {"CrossEncoder": FakeCrossEncoder}),
+    )
+
+    rr = reranker.make_reranker()
+
+    assert isinstance(rr, reranker.SentenceTransformerReranker)
+    assert rr.model_id == reranker.DEFAULT_RERANKER
+    assert created == [reranker.DEFAULT_RERANKER]
+    assert rr.score("query", ["passage"]) == [0.25]
 
 
 def test_sentence_transformer_reranker_scores_empty_passages_without_loading_model(monkeypatch):

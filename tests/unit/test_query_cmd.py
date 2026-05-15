@@ -55,6 +55,24 @@ def empty_indexed_repo(monkeypatch, tmp_path):
     return "empty"
 
 
+@pytest.fixture
+def long_content_indexed_repo(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    src = tmp_path / "long"
+    src.mkdir()
+    prefix = "x" * 220
+    (src / "late.py").write_text(
+        "def late_match():\n"
+        f"    data = '{prefix} TAILTOKEN'\n"
+        "    return data\n"
+    )
+    ns = argparse.Namespace(source=str(src), output_dir=None, max_file_mb=1.5)
+    rc = vec_cmd.run(ns)
+    assert rc == 0
+    return "long"
+
+
 def test_query_returns_lane_shape_without_explicit_lane(indexed_repo, capsys):
     ns = argparse.Namespace(
         repo=indexed_repo,
@@ -193,6 +211,45 @@ def test_full_lane_rejects_mismatched_reranker_score_count(
     assert rc == 2
     err = capsys.readouterr().err
     assert "reranker returned 1 scores for" in err
+
+
+def test_full_lane_reranks_using_full_content_not_display_preview(
+    long_content_indexed_repo,
+    capsys,
+    monkeypatch,
+):
+    seen_passages = []
+
+    class RecordingReranker:
+        model_id = "fake://recording"
+
+        def score(self, query, passages):
+            seen_passages.extend(passages)
+            return [1.0 for _ in passages]
+
+    monkeypatch.setattr(
+        query_cmd.reranker,
+        "make_reranker",
+        lambda: RecordingReranker(),
+    )
+    ns = argparse.Namespace(
+        repo=long_content_indexed_repo,
+        question="TAILTOKEN",
+        top_k=1,
+        lane="full",
+    )
+
+    rc = query_cmd.run(ns)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    blob = json.loads([l for l in out.strip().splitlines() if l.strip()][-1])
+    assert blob["results"], "expected the long chunk to be returned"
+    assert seen_passages
+    assert any("TAILTOKEN" in passage for passage in seen_passages)
+    assert all(len(passage) > 200 for passage in seen_passages)
+    assert "TAILTOKEN" not in blob["results"][0]["preview"]
+    assert len(blob["results"][0]["preview"]) <= 203
 
 
 def test_refined_queries_return_original_query_when_no_rows():
