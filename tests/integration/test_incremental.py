@@ -178,6 +178,112 @@ def test_noop_update_preserves_embedder_metadata_when_unchanged(
     assert after_meta == before_meta
 
 
+def test_noop_update_with_current_clusters_does_not_reembed_for_clustering(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        chunk_id = conn.execute(
+            "SELECT id FROM chunks WHERE file_path = 'zzz_stable.py' ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+        with conn:
+            conn.execute(
+                "INSERT INTO clusters (id, label, summary, centroid, size) "
+                "VALUES (1, 'existing', 'Existing cluster.', ?, 1)",
+                (np.ones(1536, dtype="float32").tobytes(),),
+            )
+            conn.execute(
+                "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, 1, 0.9)",
+                (chunk_id,),
+            )
+            db.write_meta(conn, "total_clusters", "1")
+    finally:
+        conn.close()
+
+    class CountingEmbedder(vec_cmd.embedder.StubEmbedder):
+        calls = 0
+
+        def embed(self, texts):
+            self.__class__.calls += 1
+            return super().embed(texts)
+
+    monkeypatch.setattr(vec_cmd.embedder, "make_embedder", lambda: CountingEmbedder())
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        cluster_count = conn.execute("SELECT COUNT(*) FROM clusters").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert CountingEmbedder.calls == 0
+    assert cluster_count == 1
+
+
+def test_cluster_backend_failure_preserves_existing_clusters_on_update(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        chunk_id = conn.execute(
+            "SELECT id FROM chunks WHERE file_path = 'zzz_stable.py' ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+        with conn:
+            conn.execute(
+                "INSERT INTO clusters (id, label, summary, centroid, size) "
+                "VALUES (1, 'existing', 'Existing cluster.', ?, 1)",
+                (np.ones(1536, dtype="float32").tobytes(),),
+            )
+            conn.execute(
+                "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, 1, 0.9)",
+                (chunk_id,),
+            )
+            db.write_meta(conn, "total_clusters", "1")
+    finally:
+        conn.close()
+
+    (incremental_source / "changed.py").write_text(
+        "def changed():\n"
+        "    return 'after-token'\n",
+        encoding="utf-8",
+    )
+
+    def fail_cluster_embeddings(embeddings, **kwargs):
+        raise RuntimeError("umap failed")
+
+    monkeypatch.setattr(vec_cmd.clusters, "cluster_embeddings", fail_cluster_embeddings)
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+    summary = json.loads(
+        [line for line in capsys.readouterr().out.splitlines() if line.strip()][-1]
+    )
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        cluster_rows = conn.execute("SELECT id, label FROM clusters").fetchall()
+        member_rows = conn.execute("SELECT chunk_id, cluster_id, membership FROM chunk_clusters").fetchall()
+        total_clusters = db.read_meta(conn, "total_clusters")
+    finally:
+        conn.close()
+
+    assert cluster_rows == [(1, "existing")]
+    assert member_rows == [(chunk_id, 1, 0.9)]
+    assert total_clusters == "1"
+    assert any("concept clustering failed: umap failed" in warning for warning in summary["warnings"])
+
+
 def test_update_schema_v1_missing_merkle_preserves_existing_db(
     incremental_source,
     tmp_path,

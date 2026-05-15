@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -317,6 +318,43 @@ def test_concept_cluster_ignores_summary_only_match_before_centroid_fallback(
     assert blob["results"][0]["score"] > 0.9
 
 
+def test_concept_cluster_escapes_label_like_wildcards(
+    indexed_graph,
+    monkeypatch,
+    capsys,
+):
+    class FakeEmbedder:
+        def embed(self, texts):
+            return np.array([[0.95, 0.05, 0.0]], dtype="float32")
+
+    monkeypatch.setattr(relate.embedder, "make_embedder", lambda: FakeEmbedder())
+
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        conn.executemany(
+            "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "auth flows", "Authentication.", np.array([0.0, 1.0, 0.0], dtype="float32").tobytes(), 1),
+                (2, "sessions", "Session handling.", np.array([1.0, 0.0, 0.0], dtype="float32").tobytes(), 1),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, ?, ?)",
+            [
+                (1, 1, 0.93),
+                (2, 2, 0.88),
+            ],
+        )
+    conn.close()
+
+    rc, blob, _ = _run(_ns(indexed_graph, "concept-cluster", "auth%", top_k=1), capsys)
+
+    assert rc == 0
+    assert blob["warnings"] == []
+    assert blob["results"][0]["label"] == "sessions"
+    assert blob["results"][0]["chunk_id"] == 2
+
+
 def test_vectorize_writes_concept_clusters_meta_and_label_warnings(
     monkeypatch,
     tmp_path,
@@ -376,6 +414,61 @@ def test_vectorize_writes_concept_clusters_meta_and_label_warnings(
     assert np.frombuffer(cluster_rows[0][4], dtype="float32").shape == (1536,)
     assert len(member_rows) == 2
     assert all(row[2] > 0.1 for row in member_rows)
+
+
+def test_vectorize_runs_cluster_labeling_without_write_transaction(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    source_name = "cluster-label-outside-txn"
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    source_dir = tmp_path / source_name
+    source_dir.mkdir()
+    (source_dir / "auth.py").write_text("def authenticate_user():\n    return True\n", encoding="utf-8")
+    (source_dir / "session.py").write_text("def create_session():\n    return 'token'\n", encoding="utf-8")
+
+    def fake_cluster_embeddings(embeddings, **kwargs):
+        return clusters.ClusterResult(
+            labels=[0, 0],
+            memberships=[0.91, 0.83],
+            reduced=np.zeros((len(embeddings), 2), dtype="float32"),
+        )
+
+    monkeypatch.setattr(vec_cmd.clusters, "cluster_embeddings", fake_cluster_embeddings)
+
+    def label_with_probe(samples, labeler):
+        probe = sqlite3.connect(paths.repo_dir(source_name) / "index.sqlite", timeout=0.1)
+        try:
+            with probe:
+                probe.execute("CREATE TABLE IF NOT EXISTS label_probe (value TEXT)")
+                probe.execute("INSERT INTO label_probe (value) VALUES ('ok')")
+        finally:
+            probe.close()
+        return "auth session", "Authentication and session handling.", None
+
+    monkeypatch.setattr(vec_cmd.clusters, "label_cluster", label_with_probe)
+
+    ns = argparse.Namespace(
+        source=str(source_dir),
+        output_dir=None,
+        max_file_mb=1.5,
+        no_cache=True,
+        update=False,
+    )
+    rc = vec_cmd.run(ns)
+    summary = json.loads([line for line in capsys.readouterr().out.splitlines() if line.strip()][-1])
+
+    conn = db.open_db(paths.repo_dir(source_name) / "index.sqlite")
+    try:
+        probe_count = conn.execute("SELECT COUNT(*) FROM label_probe").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert rc == 0
+    assert summary["clusters_indexed"] == 1
+    assert probe_count == 1
 
 
 def test_flow_alias_clean_fallback(indexed_graph, capsys):

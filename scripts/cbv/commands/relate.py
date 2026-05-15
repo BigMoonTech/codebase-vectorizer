@@ -253,7 +253,7 @@ def _concept_cluster(conn, query: str, *, top_k: int, warnings: list[str]) -> li
     if int(count) == 0:
         warnings.append("clusters not indexed")
         return []
-    like = f"%{query}%"
+    like = f"%{_escape_like(query)}%"
     rows = conn.execute(
         """
         SELECT c.id, c.label, c.summary, c.size,
@@ -262,7 +262,7 @@ def _concept_cluster(conn, query: str, *, top_k: int, warnings: list[str]) -> li
         FROM clusters c
         JOIN chunk_clusters cc ON cc.cluster_id = c.id
         JOIN chunks ch ON ch.id = cc.chunk_id
-        WHERE c.label LIKE ?
+        WHERE c.label LIKE ? ESCAPE '\\'
         ORDER BY cc.membership DESC, c.size DESC, c.label ASC, ch.file_path ASC, ch.start_line ASC
         LIMIT ?
         """,
@@ -271,6 +271,10 @@ def _concept_cluster(conn, query: str, *, top_k: int, warnings: list[str]) -> li
     if not rows:
         return _concept_cluster_by_nearest_centroid(conn, query, top_k=top_k, warnings=warnings)
     return _cluster_chunk_results(rows)
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _cluster_chunk_results(rows, *, scores: dict[int, float] | None = None) -> list[dict[str, Any]]:

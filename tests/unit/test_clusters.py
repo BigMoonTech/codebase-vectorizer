@@ -1,7 +1,9 @@
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -19,6 +21,26 @@ def test_umap_hdbscan_cluster_embeddings_returns_labels_and_memberships():
     assert len(result.labels) == len(embeddings)
     assert len(result.memberships) == len(embeddings)
     assert all(0.0 <= m <= 1.0 for m in result.memberships)
+
+
+def test_cluster_embeddings_raises_on_backend_failure(monkeypatch):
+    class BrokenUMAP:
+        def __init__(self, **kwargs):
+            pass
+
+        def fit_transform(self, embeddings):
+            raise RuntimeError("umap exploded")
+
+    class FakeHDBSCAN:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=BrokenUMAP))
+    monkeypatch.setitem(sys.modules, "hdbscan", SimpleNamespace(HDBSCAN=FakeHDBSCAN))
+    embeddings = np.ones((12, 8), dtype="float32")
+
+    with pytest.raises(clusters.ClusterBackendError, match="umap exploded"):
+        clusters.cluster_embeddings(embeddings, min_cluster_size=3)
 
 
 def test_label_cluster_uses_llm_and_falls_back_with_warning(monkeypatch):

@@ -21,6 +21,10 @@ class ClusterLabeler:
         raise NotImplementedError
 
 
+class ClusterBackendError(RuntimeError):
+    """Raised when UMAP/HDBSCAN fails unexpectedly."""
+
+
 class LocalLLMClusterLabeler(ClusterLabeler):
     def label(self, samples: list[str]) -> tuple[str, str]:
         command = os.environ.get("CBV_CLUSTER_LABEL_COMMAND")
@@ -96,12 +100,8 @@ def cluster_embeddings(
         labels = model.fit_predict(reduced)
         memberships = getattr(model, "probabilities_", np.ones(len(labels), dtype="float32"))
         return ClusterResult([int(x) for x in labels], [float(x) for x in memberships], reduced)
-    except Exception:
-        return ClusterResult(
-            [-1 for _ in range(len(embeddings))],
-            [0.0 for _ in range(len(embeddings))],
-            embeddings,
-        )
+    except Exception as e:
+        raise ClusterBackendError(str(e)) from e
 
 
 def label_cluster(samples: list[str], labeler: ClusterLabeler) -> tuple[str, str, str | None]:

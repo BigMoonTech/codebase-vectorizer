@@ -114,7 +114,6 @@ def run(ns: argparse.Namespace) -> int:
                 if force_full_rebuild
                 else delta.added | delta.modified
             )
-
         # Step 4: chunk only files that need writes.
         warnings: list[str] = []
         chunks_buf, chunked_paths = _chunk_selected_entries(
@@ -158,6 +157,15 @@ def run(ns: argparse.Namespace) -> int:
                 conn,
                 incremental_mode,
             )
+        skip_cluster_rebuild = (
+            incremental_mode
+            and not force_full_rebuild
+            and delta is not None
+            and not delta.added
+            and not delta.modified
+            and not delta.removed
+            and _clusters_current(conn)
+        )
 
         if not chunks_buf:
             print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
@@ -297,15 +305,24 @@ def run(ns: argparse.Namespace) -> int:
                 warnings,
             )
             graph.compute_pagerank(conn, warnings=warnings)
-            clusters_indexed = _write_concept_clusters(
-                conn,
+
+        if skip_cluster_rebuild:
+            clusters_indexed = _cluster_count(conn)
+        else:
+            cluster_plan = _build_concept_cluster_plan(
                 all_chunk_ids,
                 all_chunks,
                 emb,
                 warnings,
             )
+            if cluster_plan is None:
+                clusters_indexed = _cluster_count(conn)
+            else:
+                with conn:
+                    clusters_indexed = _write_concept_cluster_records(conn, cluster_plan)
 
-            # Step 7: meta + manifest.
+        # Step 7: meta + manifest.
+        with conn:
             _write_meta(
                 conn,
                 repo_name,
@@ -714,16 +731,14 @@ def _write_flow_graph(
     return int(nodes_block), int(edges_flow)
 
 
-def _write_concept_clusters(
-    conn,
+def _build_concept_cluster_plan(
     chunk_ids: list[int],
     chunks_buf: list[chunker.Chunk],
     emb: embedder.Embedder | None,
     warnings: list[str],
-) -> int:
-    _clear_clusters(conn)
+) -> tuple[list[tuple[int, str, str, bytes, int]], list[tuple[int, int, float]]] | None:
     if not chunk_ids:
-        return 0
+        return [], []
 
     cluster_embedder = emb or embedder.make_embedder()
     embeddings = _embed_in_batches(
@@ -731,7 +746,11 @@ def _write_concept_clusters(
         [c.content for c in chunks_buf],
         BATCH_SIZE,
     ).astype("float32", copy=False)
-    result = clusters.cluster_embeddings(embeddings)
+    try:
+        result = clusters.cluster_embeddings(embeddings)
+    except Exception as e:
+        warnings.append(f"concept clustering failed: {e}")
+        return None
     grouped: dict[int, list[int]] = {}
     for idx, label in enumerate(result.labels):
         membership = result.memberships[idx]
@@ -740,6 +759,8 @@ def _write_concept_clusters(
         grouped.setdefault(label, []).append(idx)
 
     labeler = clusters.LocalLLMClusterLabeler()
+    cluster_rows: list[tuple[int, str, str, bytes, int]] = []
+    member_rows: list[tuple[int, int, float]] = []
     for cluster_id, positions in sorted(grouped.items()):
         positions.sort(key=lambda idx: result.memberships[idx], reverse=True)
         samples = [chunks_buf[idx].content for idx in positions[:5]]
@@ -751,18 +772,45 @@ def _write_concept_clusters(
         norm = np.linalg.norm(centroid)
         if norm:
             centroid = centroid / norm
-        conn.execute(
-            "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
-            (int(cluster_id), label, summary, centroid.astype("float32").tobytes(), len(positions)),
+        cluster_rows.append(
+            (int(cluster_id), label, summary, centroid.astype("float32").tobytes(), len(positions))
         )
-        conn.executemany(
-            "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, ?, ?)",
-            [
-                (chunk_ids[idx], int(cluster_id), float(result.memberships[idx]))
-                for idx in positions
-            ],
+        member_rows.extend(
+            (chunk_ids[idx], int(cluster_id), float(result.memberships[idx]))
+            for idx in positions
         )
-    return len(grouped)
+    return cluster_rows, member_rows
+
+
+def _write_concept_cluster_records(
+    conn,
+    cluster_plan: tuple[list[tuple[int, str, str, bytes, int]], list[tuple[int, int, float]]],
+) -> int:
+    cluster_rows, member_rows = cluster_plan
+    _clear_clusters(conn)
+    conn.executemany(
+        "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
+        cluster_rows,
+    )
+    conn.executemany(
+        "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, ?, ?)",
+        member_rows,
+    )
+    return len(cluster_rows)
+
+
+def _cluster_count(conn) -> int:
+    return int(conn.execute("SELECT COUNT(*) FROM clusters").fetchone()[0])
+
+
+def _clusters_current(conn) -> bool:
+    total_clusters = db.read_meta(conn, "total_clusters")
+    if total_clusters is None:
+        return False
+    try:
+        return int(total_clusters) == _cluster_count(conn)
+    except ValueError:
+        return False
 
 
 def _file_has_indexed_functions(
