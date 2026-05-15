@@ -23,6 +23,17 @@ def _parse_language(language_name: str, src: bytes):
     return parser.parse(src, parser.LANGUAGES[language_name])
 
 
+def _find_first_node_with_parents(root, node_type: str):
+    stack = [(root, [])]
+    while stack:
+        node, parents = stack.pop()
+        if node.type == node_type:
+            return node, parents
+        for child in reversed(node.children):
+            stack.append((child, parents + [node]))
+    raise AssertionError(f"could not find node type {node_type!r}")
+
+
 def test_byte_to_line_simple():
     src = b"a\nbb\nccc\n"
     line_starts = cast_chunker._line_starts(src)
@@ -573,4 +584,82 @@ def test_method_kind_emitted_for_split_non_python_classes(
     expected_path = f"module/class[C]/method[{method_name}]"
     assert any(chunk.ast_path == expected_path for chunk in method_chunks), (
         f"expected {expected_path!r}: {[chunk.ast_path for chunk in chunks]}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "node_type"),
+    [
+        ("javascript", b"const f = () => 1;\n", "arrow_function"),
+        ("javascript", b"const f = function () { return 1; };\n", "function_expression"),
+        ("javascript", b"function* gen() { yield 1; }\n", "generator_function_declaration"),
+        ("tsx", b"const Component = () => <div />;\n", "arrow_function"),
+    ],
+)
+def test_common_javascript_typescript_function_forms_are_functions(
+    language_name,
+    source,
+    node_type,
+):
+    tree = _parse_language(language_name, source)
+    node, parents = _find_first_node_with_parents(tree.root_node, node_type)
+
+    assert cast_chunker._kind_for_node(language_name, node, parents) == "function"
+
+
+def test_typescript_interface_and_method_signature_are_class_and_method():
+    source = b"interface I { tick(): number; }\n"
+    tree = _parse_language("typescript", source)
+    interface_node, interface_parents = _find_first_node_with_parents(
+        tree.root_node,
+        "interface_declaration",
+    )
+    method_node, method_parents = _find_first_node_with_parents(
+        tree.root_node,
+        "method_signature",
+    )
+
+    assert (
+        cast_chunker._kind_for_node("typescript", interface_node, interface_parents)
+        == "class"
+    )
+    assert cast_chunker._kind_for_node("typescript", method_node, method_parents) == "method"
+    assert (
+        cast_chunker._ast_path("typescript", method_node, method_parents, source)
+        == "module/class[I]/method[tick]"
+    )
+
+
+def test_go_receiver_method_emits_method_chunk():
+    source = b"package main\ntype C struct{}\nfunc (c C) Tick() int { return 1 }\n"
+    tree = _parse_language("go", source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name="go",
+        file_path="x.go",
+        budget_bytes=40,
+    )
+
+    method_chunks = [chunk for chunk in chunks if chunk.kind == "method"]
+    assert method_chunks, f"expected method chunk: {chunks}"
+    assert any(chunk.ast_path == "module/method[Tick]" for chunk in method_chunks)
+
+
+def test_rust_impl_function_emits_method_chunk_with_impl_path():
+    source = b"struct C;\nimpl C { fn tick(&self) -> i32 { 1 } }\n"
+    tree = _parse_language("rust", source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name="rust",
+        file_path="x.rs",
+        budget_bytes=28,
+    )
+
+    method_chunks = [chunk for chunk in chunks if chunk.kind == "method"]
+    assert method_chunks, f"expected method chunk: {chunks}"
+    assert any(
+        chunk.ast_path == "module/class[?]/method[tick]"
+        for chunk in method_chunks
     )

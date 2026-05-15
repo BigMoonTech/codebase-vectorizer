@@ -83,9 +83,42 @@ def _extract_name(node, source: bytes) -> Optional[str]:
 
 FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
     "python": frozenset(("function_definition", "async_function_definition")),
-    "javascript": frozenset(("function_declaration", "method_definition")),
-    "typescript": frozenset(("function_declaration", "method_definition")),
-    "tsx": frozenset(("function_declaration", "method_definition")),
+    "javascript": frozenset(
+        (
+            "function",
+            "function_declaration",
+            "function_expression",
+            "arrow_function",
+            "generator_function_declaration",
+            "method_definition",
+        )
+    ),
+    "typescript": frozenset(
+        (
+            "function",
+            "function_declaration",
+            "function_expression",
+            "arrow_function",
+            "generator_function_declaration",
+            "method_definition",
+            "method_signature",
+            "function_signature",
+            "abstract_method_signature",
+        )
+    ),
+    "tsx": frozenset(
+        (
+            "function",
+            "function_declaration",
+            "function_expression",
+            "arrow_function",
+            "generator_function_declaration",
+            "method_definition",
+            "method_signature",
+            "function_signature",
+            "abstract_method_signature",
+        )
+    ),
     "go": frozenset(("function_declaration", "method_declaration")),
     "rust": frozenset(("function_item",)),
     "java": frozenset(("method_declaration", "constructor_declaration")),
@@ -99,10 +132,10 @@ FUNCTION_NODE_TYPES: dict[str, frozenset[str]] = {
 CLASS_NODE_TYPES: dict[str, frozenset[str]] = {
     "python": frozenset(("class_definition",)),
     "javascript": frozenset(("class_declaration",)),
-    "typescript": frozenset(("class_declaration",)),
-    "tsx": frozenset(("class_declaration",)),
+    "typescript": frozenset(("class_declaration", "interface_declaration")),
+    "tsx": frozenset(("class_declaration", "interface_declaration")),
     "go": frozenset(),
-    "rust": frozenset(),
+    "rust": frozenset(("impl_item",)),
     "java": frozenset(("class_declaration", "interface_declaration")),
     "c": frozenset(),
     "cpp": frozenset(("class_specifier", "struct_specifier")),
@@ -113,18 +146,30 @@ CLASS_NODE_TYPES: dict[str, frozenset[str]] = {
 }
 
 
+METHOD_NODE_TYPES: dict[str, frozenset[str]] = {
+    "go": frozenset(("method_declaration",)),
+}
+
+
 NAMEABLE_NODE_TYPES = frozenset(
     node_type
-    for language_types in (*FUNCTION_NODE_TYPES.values(), *CLASS_NODE_TYPES.values())
+    for language_types in (
+        *FUNCTION_NODE_TYPES.values(),
+        *CLASS_NODE_TYPES.values(),
+        *METHOD_NODE_TYPES.values(),
+    )
     for node_type in language_types
 )
 
 
-KIND_MAPS: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
-for _language in FUNCTION_NODE_TYPES.keys() | CLASS_NODE_TYPES.keys():
+KIND_MAPS: dict[str, tuple[frozenset[str], frozenset[str], frozenset[str]]] = {}
+for _language in (
+    FUNCTION_NODE_TYPES.keys() | CLASS_NODE_TYPES.keys() | METHOD_NODE_TYPES.keys()
+):
     KIND_MAPS[_language] = (
         FUNCTION_NODE_TYPES.get(_language, frozenset()),
         CLASS_NODE_TYPES.get(_language, frozenset()),
+        METHOD_NODE_TYPES.get(_language, frozenset()),
     )
 
 
@@ -134,7 +179,10 @@ def _kind_for_node(language: str, node, parents) -> str:
     if maps is None:
         return "section"
 
-    function_types, class_types = maps
+    function_types, class_types, method_types = maps
+    if node.type in method_types:
+        return "method"
+
     if node.type in class_types:
         return "class"
 
