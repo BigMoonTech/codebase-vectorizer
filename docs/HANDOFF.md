@@ -3,7 +3,8 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation/doc baseline after Task 14 verification: `93ef0ba docs: align task 14 smoke expectation`
+- Latest verified implementation/doc baseline before the final handoff commit:
+  `30deafc docs: mark task 14 complete`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -84,6 +85,7 @@
   - `f03c440 docs: fix task 13 review findings`
   - `aa0e758 docs: mark task 13 complete`
   - `93ef0ba docs: align task 14 smoke expectation`
+  - `30deafc docs: mark task 14 complete`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -289,7 +291,7 @@ This handoff was updated after Task 14 verification:
   - Final CLI smoke passed with stub embedder/reranker and isolated `$env:TEMP\cbv-v1-final-smoke`.
   - Smoke evidence included: first vectorize `20` chunks, `31` symbol nodes, `34` symbol edges, `64` block nodes, `76` flow edges; fast query `pipeline_used: fast`; full query `pipeline_used: full` with `expansion_size: 9`; relate/graph/flow returned JSON with `results`; stats returned counts; bench printed zeroed result JSON for zero query rows; no-change update completed with `embedding_cache_hit_rate: 0.0`.
   - Independent review confirmed the original nonzero no-change update cache-hit expectation was stale; spec and Task 8 formula require `0.0` when `chunks_buf` is empty and no cache lookups occur.
-  - Git-state check at `93ef0ba` was clean on `dev`, ahead of `origin/dev`.
+  - Git-state check after `30deafc` was clean on `dev`, ahead of `origin/dev`.
 
 ## Verified Baseline
 
@@ -387,7 +389,7 @@ Latest verification in the current session:
   - `bench` printed result JSON;
   - no-change `vectorize --update` completed and correctly reported `embedding_cache_hit_rate: 0.0`.
 - Task 14 stale-expectation review result: `PLAN_EXPECTATION_STALE`.
-- Task 14 git-state check at `93ef0ba`: clean working tree on `dev`, ahead of `origin/dev`.
+- Task 14 git-state check after `30deafc`: clean working tree on `dev`, ahead of `origin/dev`.
 
 ## What Exists Today
 
@@ -459,9 +461,8 @@ User requested:
 
 Recommended next action:
 
-1. Commit the final Task 14 plan/handoff state.
-2. Run one final `git status --short --branch` check after that commit.
-3. Do not merge or open a PR unless the user explicitly requests it.
+1. Do not merge or open a PR unless the user explicitly requests it.
+2. Push `dev` only if the user wants these local completion commits published.
 
 ## Do Not Drift
 
