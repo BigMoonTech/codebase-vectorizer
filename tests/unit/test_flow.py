@@ -59,6 +59,20 @@ RUST_SOURCE = (
     "    total\n"
     "}\n"
 )
+RUBY_BRANCH_LOOP_SOURCE = (
+    "def decide(flag, count)\n"
+    "  value = 0\n"
+    "  if flag\n"
+    "    value = 1\n"
+    "  else\n"
+    "    value = 2\n"
+    "  end\n"
+    "  while count > 0\n"
+    "    count = count - 1\n"
+    "  end\n"
+    "  value\n"
+    "end\n"
+)
 
 
 def _extract_fixture():
@@ -130,6 +144,29 @@ def test_ruby_flow_extracts_instance_and_singleton_methods():
     assert "flow.rb::Runner::run" in parent_symbols
     assert "flow.rb::Runner::build" in parent_symbols
     assert any(edge.kind == "controls" for edge in edges)
+
+
+def test_ruby_flow_emits_if_and_while_guards_and_loop_back_edge():
+    nodes, edges = flow.extract_flow("ruby", "flow.rb", RUBY_BRANCH_LOOP_SOURCE)
+
+    guard_payloads = [
+        json.loads(edge.metadata or "{}")
+        for edge in edges
+        if edge.kind == "guards"
+    ]
+    control_edges = {
+        (edge.src_name, edge.dst_name)
+        for edge in edges
+        if edge.kind == "controls"
+    }
+    blocks_by_signature = {node.signature: node.name for node in nodes}
+
+    assert any(payload.get("predicate") == "flag" for payload in guard_payloads)
+    assert any(payload.get("predicate") == "count > 0" for payload in guard_payloads)
+    assert (
+        blocks_by_signature["count = count - 1"],
+        blocks_by_signature["while count > 0"],
+    ) in control_edges
 
 
 def test_rust_flow_extracts_common_loop_guards():

@@ -55,9 +55,12 @@ _TS_BLOCK_TYPES = frozenset(
         "compound_statement",
         "body_statement",
         "do_block",
+        "then",
+        "do",
+        "else",
     }
 )
-_TS_IF_TYPES = frozenset(("if_statement", "if_expression", "unless"))
+_TS_IF_TYPES = frozenset(("if_statement", "if_expression", "unless", "if"))
 _TS_LOOP_TYPES = frozenset(
     (
         "for_statement",
@@ -66,6 +69,7 @@ _TS_LOOP_TYPES = frozenset(
         "for_expression",
         "while_statement",
         "while_expression",
+        "while",
         "do_statement",
         "loop_expression",
     )
@@ -765,6 +769,10 @@ def _ts_condition_text(node, source: bytes) -> str:
 
 def _ts_condition_node(node):
     condition = node.child_by_field_name("condition")
+    if condition is None and node.type in {"if", "while"}:
+        for child in node.children:
+            if child.is_named and child.type not in _TS_BLOCK_TYPES:
+                return child
     if condition is None:
         for child in node.children:
             if not child.is_named or child.type in _TS_BLOCK_TYPES or child.type == "else_clause":
