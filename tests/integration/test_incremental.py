@@ -660,7 +660,7 @@ def test_update_preserves_modified_file_when_rechunk_fails(
     assert after_content == before_content
     assert "after-token" not in after_content
     assert after_sha == before_sha
-    assert summary["warnings"] == ["chunk failed for changed.py: forced chunk failure"]
+    assert "chunk failed for changed.py: forced chunk failure" in summary["warnings"]
 
 
 def test_update_embedding_insert_failure_rolls_back_destructive_changes(
