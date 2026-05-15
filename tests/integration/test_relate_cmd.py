@@ -10,8 +10,9 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import pytest
+import numpy as np
 
-from cbv import db, paths  # noqa: E402
+from cbv import clusters, db, paths  # noqa: E402
 from cbv.commands import flow_cmd, graph_cmd, relate, vectorize as vec_cmd  # noqa: E402
 
 
@@ -242,6 +243,101 @@ def test_concept_cluster_returns_member_chunks_ranked_by_membership(indexed_grap
     assert blob["results"][0]["file_path"] == "pkg/auth.py"
     assert blob["results"][0]["chunk_name"] == "authenticate_user"
     assert blob["results"][0]["membership"] == 0.82
+
+
+def test_concept_cluster_falls_back_to_nearest_centroid(indexed_graph, monkeypatch, capsys):
+    class FakeEmbedder:
+        def embed(self, texts):
+            return np.array([[0.95, 0.05, 0.0]], dtype="float32")
+
+    monkeypatch.setattr(relate.embedder, "make_embedder", lambda: FakeEmbedder())
+
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        conn.executemany(
+            "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "payments", "Payment flows.", np.array([0.0, 1.0, 0.0], dtype="float32").tobytes(), 1),
+                (2, "sessions", "Session handling.", np.array([1.0, 0.0, 0.0], dtype="float32").tobytes(), 1),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, ?, ?)",
+            [
+                (3, 1, 0.93),
+                (1, 2, 0.88),
+            ],
+        )
+    conn.close()
+
+    rc, blob, _ = _run(_ns(indexed_graph, "concept-cluster", "login", top_k=1), capsys)
+
+    assert rc == 0
+    assert blob["warnings"] == []
+    assert blob["results"][0]["label"] == "sessions"
+    assert blob["results"][0]["chunk_id"] == 1
+    assert blob["results"][0]["score"] > 0.9
+
+
+def test_vectorize_writes_concept_clusters_meta_and_label_warnings(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    source_name = "clustered"
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    source_dir = tmp_path / source_name
+    source_dir.mkdir()
+    (source_dir / "auth.py").write_text("def authenticate_user():\n    return True\n", encoding="utf-8")
+    (source_dir / "session.py").write_text("def create_session():\n    return 'token'\n", encoding="utf-8")
+    (source_dir / "other.py").write_text("def unrelated():\n    return None\n", encoding="utf-8")
+
+    def fake_cluster_embeddings(embeddings, **kwargs):
+        return clusters.ClusterResult(
+            labels=[0, 0, -1],
+            memberships=[0.91, 0.83, 0.0],
+            reduced=np.zeros((len(embeddings), 2), dtype="float32"),
+        )
+
+    class FailingLabeler:
+        def label(self, samples):
+            raise RuntimeError("offline")
+
+    monkeypatch.setattr(vec_cmd.clusters, "cluster_embeddings", fake_cluster_embeddings)
+    monkeypatch.setattr(vec_cmd.clusters, "LocalLLMClusterLabeler", FailingLabeler)
+
+    ns = argparse.Namespace(
+        source=str(source_dir),
+        output_dir=None,
+        max_file_mb=1.5,
+        no_cache=True,
+        update=False,
+    )
+    rc = vec_cmd.run(ns)
+    summary = json.loads([line for line in capsys.readouterr().out.splitlines() if line.strip()][-1])
+
+    conn = db.open_db(paths.repo_dir(source_name) / "index.sqlite")
+    try:
+        cluster_rows = conn.execute("SELECT id, label, summary, size, centroid FROM clusters").fetchall()
+        member_rows = conn.execute(
+            "SELECT chunk_id, cluster_id, membership FROM chunk_clusters ORDER BY membership DESC"
+        ).fetchall()
+        total_clusters = db.read_meta(conn, "total_clusters")
+    finally:
+        conn.close()
+    manifest = json.loads((paths.repo_dir(source_name) / "manifest.json").read_text())
+
+    assert rc == 0
+    assert summary["clusters_indexed"] == 1
+    assert summary["warnings"] == manifest["warnings"]
+    assert any("LLM cluster labeling failed; used deterministic label: offline" in w for w in summary["warnings"])
+    assert total_clusters == "1"
+    assert len(cluster_rows) == 1
+    assert cluster_rows[0][3] == 2
+    assert np.frombuffer(cluster_rows[0][4], dtype="float32").shape == (1536,)
+    assert len(member_rows) == 2
+    assert all(row[2] > 0.1 for row in member_rows)
 
 
 def test_flow_alias_clean_fallback(indexed_graph, capsys):

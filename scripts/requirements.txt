@@ -12,3 +12,5 @@ requests>=2.31.0
 tree-sitter>=0.21.0
 tree-sitter-language-pack>=0.3.0,<1.0.0
 networkx>=3.2
+umap-learn>=0.5.5
+hdbscan>=0.8.33

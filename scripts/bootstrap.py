@@ -39,7 +39,7 @@ SUPPORTED_PY = {(3, 10), (3, 11), (3, 12), (3, 13)}
 ALLOWED_SUBCOMMANDS = {"vectorize", "query", "stats", "relate", "graph", "flow", "list"}
 CORE_DEPENDENCY_PROBE = (
     "import sqlite_vec, transformers, sentence_transformers, numpy, pathspec, requests, "
-    "huggingface_hub, tree_sitter, tree_sitter_language_pack, networkx"
+    "huggingface_hub, tree_sitter, tree_sitter_language_pack, networkx, umap, hdbscan"
 )
 
 

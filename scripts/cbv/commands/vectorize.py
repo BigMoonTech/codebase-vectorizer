@@ -20,9 +20,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import List
 
+import numpy as np
+
 from cbv import (
     cache,
     chunker,
+    clusters,
     db,
     embedder,
     flow,
@@ -294,6 +297,13 @@ def run(ns: argparse.Namespace) -> int:
                 warnings,
             )
             graph.compute_pagerank(conn, warnings=warnings)
+            clusters_indexed = _write_concept_clusters(
+                conn,
+                all_chunk_ids,
+                all_chunks,
+                emb,
+                warnings,
+            )
 
             # Step 7: meta + manifest.
             _write_meta(
@@ -309,6 +319,7 @@ def run(ns: argparse.Namespace) -> int:
                 nodes_block,
                 edges_symbol,
                 edges_flow,
+                clusters_indexed,
                 incremental.merkle_root(
                     {rel: sha for rel, (sha, _size) in merkle_to_write.items()}
                 ),
@@ -334,7 +345,7 @@ def run(ns: argparse.Namespace) -> int:
         "nodes_block": nodes_block,
         "edges_symbol": edges_symbol,
         "edges_flow": edges_flow,
-        "clusters_indexed": 0,  # Slice 7
+        "clusters_indexed": clusters_indexed,
         "elapsed_seconds": round(elapsed, 2),
         "embedding_cache_hit_rate": embedding_cache_hit_rate,
         "warnings": warnings,
@@ -459,6 +470,11 @@ def _graph_source_files(
 def _clear_symbol_graph(conn) -> None:
     conn.execute("DELETE FROM edges")
     conn.execute("DELETE FROM nodes")
+
+
+def _clear_clusters(conn) -> None:
+    conn.execute("DELETE FROM chunk_clusters")
+    conn.execute("DELETE FROM clusters")
 
 
 def _delete_file_chunks(conn, file_paths: set[str]) -> None:
@@ -698,6 +714,57 @@ def _write_flow_graph(
     return int(nodes_block), int(edges_flow)
 
 
+def _write_concept_clusters(
+    conn,
+    chunk_ids: list[int],
+    chunks_buf: list[chunker.Chunk],
+    emb: embedder.Embedder | None,
+    warnings: list[str],
+) -> int:
+    _clear_clusters(conn)
+    if not chunk_ids:
+        return 0
+
+    cluster_embedder = emb or embedder.make_embedder()
+    embeddings = _embed_in_batches(
+        cluster_embedder,
+        [c.content for c in chunks_buf],
+        BATCH_SIZE,
+    ).astype("float32", copy=False)
+    result = clusters.cluster_embeddings(embeddings)
+    grouped: dict[int, list[int]] = {}
+    for idx, label in enumerate(result.labels):
+        membership = result.memberships[idx]
+        if label < 0 or membership <= 0.1:
+            continue
+        grouped.setdefault(label, []).append(idx)
+
+    labeler = clusters.LocalLLMClusterLabeler()
+    for cluster_id, positions in sorted(grouped.items()):
+        positions.sort(key=lambda idx: result.memberships[idx], reverse=True)
+        samples = [chunks_buf[idx].content for idx in positions[:5]]
+        label, summary, warning = clusters.label_cluster(samples, labeler)
+        if warning is not None:
+            warnings.append(warning)
+
+        centroid = embeddings[positions].mean(axis=0).astype("float32")
+        norm = np.linalg.norm(centroid)
+        if norm:
+            centroid = centroid / norm
+        conn.execute(
+            "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
+            (int(cluster_id), label, summary, centroid.astype("float32").tobytes(), len(positions)),
+        )
+        conn.executemany(
+            "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, ?, ?)",
+            [
+                (chunk_ids[idx], int(cluster_id), float(result.memberships[idx]))
+                for idx in positions
+            ],
+        )
+    return len(grouped)
+
+
 def _file_has_indexed_functions(
     rel_file_path: str,
     function_ids: dict[str, int],
@@ -780,6 +847,7 @@ def _write_meta(
     nodes_block,
     edges_symbol,
     edges_flow,
+    total_clusters,
     merkle_root_sha,
 ):
     rows = [
@@ -796,7 +864,7 @@ def _write_meta(
         ("total_nodes_block", str(nodes_block)),
         ("total_edges_symbol", str(edges_symbol)),
         ("total_edges_flow", str(edges_flow)),
-        ("total_clusters", "0"),
+        ("total_clusters", str(total_clusters)),
         ("merkle_root_sha", merkle_root_sha),
     ]
     conn.executemany(

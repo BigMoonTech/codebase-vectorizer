@@ -6,7 +6,9 @@ import sys
 from collections import deque
 from typing import Any
 
-from cbv import db, paths
+import numpy as np
+
+from cbv import db, embedder, paths
 
 SYMBOL_EDGE_KINDS = ("calls", "imports", "inherits", "references", "contains")
 FLOW_EDGE_KINDS = ("controls", "dataflow", "guards")
@@ -266,6 +268,13 @@ def _concept_cluster(conn, query: str, *, top_k: int, warnings: list[str]) -> li
         """,
         (like, like, top_k),
     ).fetchall()
+    if not rows:
+        return _concept_cluster_by_nearest_centroid(conn, query, top_k=top_k, warnings=warnings)
+    return _cluster_chunk_results(rows)
+
+
+def _cluster_chunk_results(rows, *, scores: dict[int, float] | None = None) -> list[dict[str, Any]]:
+    scores = scores or {}
     return [
         {
             "cluster_id": row[0],
@@ -280,9 +289,71 @@ def _concept_cluster(conn, query: str, *, top_k: int, warnings: list[str]) -> li
             "start_line": row[9],
             "end_line": row[10],
             "membership": round(float(row[11] or 0.0), 6),
+            **(
+                {"score": round(scores[int(row[0])], 6)}
+                if int(row[0]) in scores
+                else {}
+            ),
         }
         for row in rows
     ]
+
+
+def _concept_cluster_by_nearest_centroid(conn, query: str, *, top_k: int, warnings: list[str]) -> list[dict[str, Any]]:
+    cluster_rows = conn.execute(
+        "SELECT id, label, summary, size, centroid FROM clusters ORDER BY size DESC, label ASC"
+    ).fetchall()
+    centroids: list[tuple[int, np.ndarray]] = []
+    for cluster_id, _label, _summary, _size, raw_centroid in cluster_rows:
+        centroid = np.frombuffer(raw_centroid, dtype="float32")
+        if centroid.size == 0:
+            continue
+        norm = np.linalg.norm(centroid)
+        if norm:
+            centroid = centroid / norm
+        centroids.append((int(cluster_id), centroid))
+    if not centroids:
+        return []
+
+    try:
+        query_vec = embedder.make_embedder().embed([query])[0].astype("float32", copy=False)
+    except Exception as e:
+        warnings.append(f"cluster centroid query failed: {e}")
+        return []
+    query_norm = np.linalg.norm(query_vec)
+    if query_norm:
+        query_vec = query_vec / query_norm
+
+    scored = []
+    for cluster_id, centroid in centroids:
+        if centroid.shape != query_vec.shape:
+            continue
+        scored.append((cluster_id, float(np.dot(query_vec, centroid))))
+    if not scored:
+        return []
+    scored.sort(key=lambda item: item[1], reverse=True)
+    cluster_ids = [cluster_id for cluster_id, _score in scored[:top_k]]
+    scores = {cluster_id: score for cluster_id, score in scored}
+    placeholders = ",".join("?" for _ in cluster_ids)
+    order_case = " ".join(
+        f"WHEN {cluster_id} THEN {idx}"
+        for idx, cluster_id in enumerate(cluster_ids)
+    )
+    rows = conn.execute(
+        f"""
+        SELECT c.id, c.label, c.summary, c.size,
+               ch.id, ch.file_path, ch.language, ch.kind, ch.name, ch.start_line, ch.end_line,
+               cc.membership
+        FROM clusters c
+        JOIN chunk_clusters cc ON cc.cluster_id = c.id
+        JOIN chunks ch ON ch.id = cc.chunk_id
+        WHERE c.id IN ({placeholders})
+        ORDER BY CASE c.id {order_case} END, cc.membership DESC, ch.file_path ASC, ch.start_line ASC
+        LIMIT ?
+        """,
+        (*cluster_ids, top_k),
+    ).fetchall()
+    return _cluster_chunk_results(rows, scores=scores)
 
 
 def _flow_query(
