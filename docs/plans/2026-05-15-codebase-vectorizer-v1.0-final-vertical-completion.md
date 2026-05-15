@@ -2214,7 +2214,7 @@ git commit -m "docs: update v1.0 code-complete surfaces"
 
 **Completion tracking directive:** After the full suite, final smoke, and git-state checks pass, edit this plan to mark Task 14 complete. This edit is part of the definition of done for the final verification gate.
 
-- [ ] **Step 1: Run full unit/integration suite**
+- [x] **Step 1: Run full unit/integration suite**
 
 ```powershell
 & "$env:LOCALAPPDATA\codebase-vectorizer\python-env\Scripts\python.exe" -m pytest tests/ -v
@@ -2222,7 +2222,7 @@ git commit -m "docs: update v1.0 code-complete surfaces"
 
 Expected: all tests pass, network clone test may be skipped.
 
-- [ ] **Step 2: Run final CLI smoke**
+- [x] **Step 2: Run final CLI smoke**
 
 ```powershell
 $ErrorActionPreference='Stop'
@@ -2256,7 +2256,7 @@ Expected:
 - update run completes; for this no-change smoke fixture, `embedding_cache_hit_rate`
   reports `0.0` because no cache lookups occur.
 
-- [ ] **Step 3: Inspect final git state**
+- [x] **Step 3: Inspect final git state**
 
 ```bash
 git status --short --branch
@@ -2265,7 +2265,7 @@ git log --oneline --decorate -8
 
 Expected: clean working tree on `dev`, ahead of `origin/dev` by the final plan commits.
 
-- [ ] **Step 4: Optional final branch integration**
+- [x] **Step 4: Optional final branch integration**
 
 Because the user requested this plan to be written and executed directly on `dev`, no worktree merge is needed for this plan. If a future execution session uses a worktree anyway, merge back to `dev` with `--no-ff` and re-run this verification gate before cleanup.
 

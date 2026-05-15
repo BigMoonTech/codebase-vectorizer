@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation/doc baseline before Task 14: `f03c440 docs: fix task 13 review findings`
+- Latest confirmed implementation/doc baseline after Task 14 verification: `93ef0ba docs: align task 14 smoke expectation`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -82,6 +82,8 @@
   - `52326b1 docs: mark task 12 complete`
   - `771f59e docs: update v1.0 code-complete surfaces`
   - `f03c440 docs: fix task 13 review findings`
+  - `aa0e758 docs: mark task 13 complete`
+  - `93ef0ba docs: align task 14 smoke expectation`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -90,7 +92,7 @@
 
 ## Current Working State
 
-This handoff was updated after Task 13 approval:
+This handoff was updated after Task 14 verification:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
@@ -282,6 +284,12 @@ This handoff was updated after Task 13 approval:
   - `skills/codebase-query/SKILL.md` documents `pipeline_used`, `refined_queries`, `expansion_size`, and `reranker_model`.
   - `skills/codebase-relate/SKILL.md` lists the exact parser verbs and aliases.
   - `docs/HANDOFF.md` was corrected so the current-state sections no longer describe old Slice 1 behavior or label final v1.0 features as interim Slice 3/Milestone 1 work.
+- Task 14 final verification gate passed:
+  - Full suite: `453 passed, 1 skipped`.
+  - Final CLI smoke passed with stub embedder/reranker and isolated `$env:TEMP\cbv-v1-final-smoke`.
+  - Smoke evidence included: first vectorize `20` chunks, `31` symbol nodes, `34` symbol edges, `64` block nodes, `76` flow edges; fast query `pipeline_used: fast`; full query `pipeline_used: full` with `expansion_size: 9`; relate/graph/flow returned JSON with `results`; stats returned counts; bench printed zeroed result JSON for zero query rows; no-change update completed with `embedding_cache_hit_rate: 0.0`.
+  - Independent review confirmed the original nonzero no-change update cache-hit expectation was stale; spec and Task 8 formula require `0.0` when `chunks_buf` is empty and no cache lookups occur.
+  - Git-state check at `93ef0ba` was clean on `dev`, ahead of `origin/dev`.
 
 ## Verified Baseline
 
@@ -369,11 +377,22 @@ Latest verification in the current session:
 - Task 13 whitespace check: `git diff --check 52326b1..HEAD` reported no issues.
 - Task 13 final spec review approved: `SPEC APPROVED: compliant`.
 - Task 13 final code-quality review approved: `APPROVED: no blocking code-quality issues`.
+- Task 14 full suite: `453 passed, 1 skipped`.
+- Task 14 final CLI smoke passed:
+  - first vectorize summary had nonzero chunks, symbol nodes, and symbol edges;
+  - fast query reported `pipeline_used: fast`;
+  - full query reported `pipeline_used: full` and `expansion_size: 9`;
+  - `relate`, `graph`, and `flow` returned JSON with `results`;
+  - `stats` returned counts;
+  - `bench` printed result JSON;
+  - no-change `vectorize --update` completed and correctly reported `embedding_cache_hit_rate: 0.0`.
+- Task 14 stale-expectation review result: `PLAN_EXPECTATION_STALE`.
+- Task 14 git-state check at `93ef0ba`: clean working tree on `dev`, ahead of `origin/dev`.
 
 ## What Exists Today
 
-v1.0 is code-complete through Task 13 docs. Task 14 final verification remains
-before calling the initial version complete. The current implementation includes:
+v1.0 initial version is code-complete through Task 14 final verification. The
+current implementation includes:
 
 - `scripts/cbv/` package replacing the old v0.3.0 scripts.
 - v1.0 SQLite schema and populated chunks, FTS5 rows, sqlite-vec rows, metadata,
@@ -410,11 +429,11 @@ The master document is:
 
 The spec is authoritative over all plans. The final completion plan has been revised so reduced local MVP behavior is allowed only as an intermediate bootstrap step or as an explicit spec-defined fallback. It is not the final definition of done.
 
-Spec-required surfaces at Task 13:
+Spec-required surfaces through Task 14:
 
 1. README and skill docs are aligned to final behavior by the documentation pass.
 2. Task 13 spec and quality reviews passed, and the plan checklist is marked complete.
-3. Task 14 final verification gate remains before v1.0 code-complete.
+3. Task 14 full suite, CLI smoke, git-state check, and plan checklist are complete.
 
 ## Completion Tracking Rule
 
@@ -440,11 +459,9 @@ User requested:
 
 Recommended next action:
 
-1. Run Task 14's final full verification gate before calling v1.0 code-complete.
-2. Mark Task 14 complete in
-   `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`
-   only after the full suite, CLI smoke, and git-state checks pass.
-3. Update this handoff again with final verification results before any compaction or final handoff.
+1. Commit the final Task 14 plan/handoff state.
+2. Run one final `git status --short --branch` check after that commit.
+3. Do not merge or open a PR unless the user explicitly requests it.
 
 ## Do Not Drift
 
