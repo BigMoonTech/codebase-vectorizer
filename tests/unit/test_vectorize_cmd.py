@@ -103,6 +103,43 @@ def test_vectorize_populates_symbol_trigrams(tmp_home, source_repo):
         conn.close()
 
 
+def test_vectorize_preserves_file_nodes_and_warns_when_symbol_parse_fails(
+    tmp_home,
+    source_repo,
+    monkeypatch,
+    capsys,
+):
+    from cbv import db, parser
+
+    real_parse = parser.parse
+
+    def fail_lib_parse(content, language):
+        if b"def helper" in content:
+            return None
+        return real_parse(content, language)
+
+    monkeypatch.setattr(parser, "parse", fail_lib_parse)
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+    vec_cmd.run(ns)
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+
+    conn = db.open_db(paths.repo_dir("upstream") / "index.sqlite")
+    rows = conn.execute(
+        "SELECT kind, name, short_name, chunk_id FROM nodes WHERE name = 'lib.py'"
+    ).fetchall()
+    lib_chunk_id = conn.execute(
+        "SELECT id FROM chunks WHERE file_path = 'lib.py'"
+    ).fetchone()[0]
+
+    assert rows == [("file", "lib.py", "lib.py", lib_chunk_id)]
+    assert any(
+        warning.startswith("symbol extraction failed for lib.py:")
+        for warning in blob["warnings"]
+    )
+
+
 def test_vectorize_writes_meta(tmp_home, source_repo):
     ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
     vec_cmd.run(ns)

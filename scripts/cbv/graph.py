@@ -27,13 +27,23 @@ def insert_nodes(conn, nodes: list[SymbolNode]) -> dict[str, int]:
 
 
 def insert_edges(conn, edges: list[SymbolEdge], ids: dict[str, int]) -> int:
-    by_short = {}
+    by_short: dict[str, list[int]] = {}
     for name, node_id in ids.items():
-        by_short.setdefault(name.rsplit("::", 1)[-1], node_id)
+        by_short.setdefault(name.rsplit("::", 1)[-1], []).append(node_id)
+
+    def resolve(name: str) -> int | None:
+        exact = ids.get(name)
+        if exact is not None:
+            return exact
+        candidates = by_short.get(name, [])
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
     written = 0
     for e in edges:
-        src = ids.get(e.src_name) or by_short.get(e.src_name)
-        dst = ids.get(e.dst_name) or by_short.get(e.dst_name)
+        src = resolve(e.src_name)
+        dst = resolve(e.dst_name)
         if src is None or dst is None or src == dst:
             continue
         cur = conn.execute(

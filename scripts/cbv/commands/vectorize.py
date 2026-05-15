@@ -203,12 +203,19 @@ def _write_symbol_graph(
     for rel_file_path, file_chunks in sorted(chunks_by_file.items()):
         language = file_chunks[0][3]
         language_meta = parser.language_for_name(language)
-        if language_meta is None:
-            continue
+        source_bytes = b""
 
         try:
             source_bytes = (src_dir / Path(rel_file_path)).read_bytes()
-            tree = parser.parse(source_bytes, language_meta)
+            tree = (
+                parser.parse(source_bytes, language_meta)
+                if language_meta is not None
+                else None
+            )
+            if language_meta is not None and tree is None:
+                warnings.append(
+                    f"symbol extraction failed for {rel_file_path}: parser returned no tree"
+                )
             extracted = symbols.extract_symbols(
                 Path(rel_file_path),
                 language,
@@ -217,7 +224,12 @@ def _write_symbol_graph(
             )
         except Exception as e:
             warnings.append(f"symbol extraction failed for {rel_file_path}: {e}")
-            continue
+            extracted = symbols.extract_symbols(
+                Path(rel_file_path),
+                language,
+                source_bytes,
+                None,
+            )
 
         ranges = [(start, end, chunk_id) for start, end, chunk_id, _ in file_chunks]
         for node in extracted.nodes:
@@ -234,8 +246,14 @@ def _write_symbol_graph(
             node_ids = graph.insert_nodes(conn, all_nodes)
             graph.insert_edges(conn, all_edges, node_ids)
 
-    nodes_symbol = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-    edges_symbol = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    nodes_symbol = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE kind != 'block'"
+    ).fetchone()[0]
+    edges_symbol = conn.execute(
+        "SELECT COUNT(*) FROM edges "
+        "WHERE kind IN ('defines','calls','imports','inherits','references',"
+        "'contains','tests','documents','mentions')"
+    ).fetchone()[0]
     return int(nodes_symbol), int(edges_symbol)
 
 

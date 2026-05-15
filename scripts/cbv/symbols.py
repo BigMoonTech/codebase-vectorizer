@@ -60,25 +60,12 @@ def extract_symbols(
     source: bytes,
     tree,
 ) -> ExtractedSymbols:
-    if tree is None:
-        return ExtractedSymbols([], [])
-
-    nodes: list[SymbolNode] = []
+    nodes: list[SymbolNode] = [_file_node(file_path, source)]
     edges: list[SymbolEdge] = []
     module_name = file_path.as_posix()
 
-    nodes.append(
-        SymbolNode(
-            kind="file",
-            name=module_name,
-            short_name=file_path.name,
-            file_path=module_name,
-            start_line=1,
-            end_line=1,
-            start_byte=0,
-            end_byte=len(source),
-        )
-    )
+    if tree is None:
+        return ExtractedSymbols(nodes, edges)
 
     def walk(node, parent_symbol: str) -> None:
         current_parent = parent_symbol
@@ -154,6 +141,19 @@ def extract_symbols(
 
     walk(tree.root_node, module_name)
     return ExtractedSymbols(nodes, edges)
+
+
+def _file_node(file_path: Path, source: bytes) -> SymbolNode:
+    return SymbolNode(
+        kind="file",
+        name=file_path.as_posix(),
+        short_name=file_path.name,
+        file_path=file_path.as_posix(),
+        start_line=1,
+        end_line=1,
+        start_byte=0,
+        end_byte=len(source),
+    )
 
 
 def _definition_kind(language: str, node) -> str | None:

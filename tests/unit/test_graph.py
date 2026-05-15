@@ -141,6 +141,72 @@ def test_insert_edges_resolves_dst_by_short_name():
     ]
 
 
+def test_insert_edges_drops_ambiguous_short_name_edges():
+    conn = _conn()
+    ids = graph.insert_nodes(
+        conn,
+        [
+            SymbolNode(
+                kind="file",
+                name="pkg/router.py",
+                short_name="router.py",
+                file_path="pkg/router.py",
+                start_line=1,
+                end_line=1,
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/router.py::route",
+                short_name="route",
+                file_path="pkg/router.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/router.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/a.py::helper",
+                short_name="helper",
+                file_path="pkg/a.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/a.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/b.py::helper",
+                short_name="helper",
+                file_path="pkg/b.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/b.py",
+            ),
+        ],
+    )
+
+    written = graph.insert_edges(
+        conn,
+        [
+            SymbolEdge(
+                kind="calls",
+                src_name="pkg/router.py::route",
+                dst_name="helper",
+            ),
+            SymbolEdge(
+                kind="calls",
+                src_name="pkg/router.py::route",
+                dst_name="pkg/b.py::helper",
+            ),
+        ],
+        ids,
+    )
+
+    assert written == 1
+    assert conn.execute("SELECT dst FROM edges").fetchall() == [
+        (ids["pkg/b.py::helper"],)
+    ]
+
+
 def test_insert_edges_drops_unresolved_and_self_edges():
     conn = _conn()
     ids = graph.insert_nodes(

@@ -31,10 +31,13 @@ def test_javascript_symbols_extract_function_and_call():
     assert any(e.kind == "calls" and e.dst_name == "snakeCase" for e in extracted.edges)
 
 
-def test_extract_symbols_returns_empty_when_tree_missing():
+def test_extract_symbols_returns_file_node_when_tree_missing():
     extracted = symbols.extract_symbols(Path("pkg/router.py"), "python", b"", None)
 
-    assert extracted.nodes == []
+    assert [
+        (n.kind, n.name, n.short_name, n.file_path, n.start_line, n.end_line)
+        for n in extracted.nodes
+    ] == [("file", "pkg/router.py", "router.py", "pkg/router.py", 1, 1)]
     assert extracted.edges == []
 
 
