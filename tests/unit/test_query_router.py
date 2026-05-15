@@ -15,6 +15,14 @@ def test_identifier_routes_fast():
     assert query_router.route("where is authenticate_user") == "fast"
 
 
+def test_regex_routes_fast():
+    assert query_router.route("regex:authenticate_.*") == "fast"
+
+
+def test_short_identifier_like_query_routes_fast():
+    assert query_router.route("auth db") == "fast"
+
+
 def test_natural_language_routes_full():
     assert query_router.route("how does login authenticate users") == "full"
 
