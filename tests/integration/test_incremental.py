@@ -204,6 +204,59 @@ def test_update_schema_v1_missing_merkle_preserves_existing_db(
     assert merkle_count == distinct_files
 
 
+def test_update_schema_v1_missing_merkle_chunk_failure_preserves_index(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_counts = {
+            "chunks": conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+            "vec": conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0],
+            "nodes": conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+        }
+        conn.execute("DELETE FROM merkle_files")
+        conn.commit()
+    finally:
+        conn.close()
+
+    real_chunk_file = vec_cmd.chunker.chunk_file
+
+    def fail_changed(path):
+        if Path(path).name == "changed.py":
+            raise RuntimeError("forced chunk failure")
+        return real_chunk_file(path)
+
+    monkeypatch.setattr(vec_cmd.chunker, "chunk_file", fail_changed)
+
+    ns = argparse.Namespace(
+        source=str(incremental_source),
+        output_dir=str(output_dir),
+        max_file_mb=1.5,
+        no_cache=False,
+        update=True,
+    )
+    assert vec_cmd.run(ns) != 0
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        after_counts = {
+            "chunks": conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+            "vec": conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0],
+            "nodes": conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+        }
+        merkle_count = conn.execute("SELECT COUNT(*) FROM merkle_files").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert after_counts == before_counts
+    assert merkle_count == 0
+
+
 def test_update_preserves_modified_file_when_rechunk_fails(
     incremental_source,
     tmp_path,

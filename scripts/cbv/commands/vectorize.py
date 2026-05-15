@@ -195,7 +195,7 @@ def run(ns: argparse.Namespace) -> int:
         # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().
         if incremental_mode:
             if force_full_rebuild or missing_prior_merkle:
-                if force_full_rebuild and chunked_paths != set(current_shas):
+                if chunked_paths != set(current_shas):
                     print(
                         "[vectorize] update aborted: full rebuild could not "
                         "chunk every current file",
