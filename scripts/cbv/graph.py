@@ -205,10 +205,12 @@ def personalized_pagerank(
             personalization=personalization,
         )
     except nx.PowerIterationFailedConvergence:
+        candidates = set(candidate_chunk_ids) if candidate_chunk_ids is not None else None
         return {
             chunk_id: 1.0
             for chunk_id in personalization_chunk_weights
             if chunk_id in node_to_chunk.values()
+            and (candidates is None or chunk_id in candidates)
         }
 
     candidates = set(candidate_chunk_ids) if candidate_chunk_ids is not None else None

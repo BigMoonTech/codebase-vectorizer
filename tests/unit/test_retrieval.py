@@ -113,7 +113,12 @@ def test_personalized_pagerank_uses_seed_scores_when_networkx_does_not_converge(
 
         monkeypatch.setattr(nx, "pagerank", fail_to_converge)
 
-        assert graph.personalized_pagerank(conn, [10]) == {10: 1.0}
+        assert graph.personalized_pagerank(
+            conn,
+            [10],
+            expansion_chunk_ids=[20],
+            candidate_chunk_ids=[20],
+        ) == {20: 1.0}
     finally:
         conn.close()
 
