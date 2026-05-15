@@ -99,7 +99,7 @@ This is the highest-value remaining vertical. After this milestone, identifier-l
 - Modify: `scripts/cbv/commands/vectorize.py`
 - Modify: `tests/unit/test_vectorize_cmd.py`
 
-- [ ] **Step 1: Write failing identifier tests**
+- [x] **Step 1: Write failing identifier tests**
 
 Create `tests/unit/test_identifiers.py`:
 
@@ -126,7 +126,7 @@ def test_symbol_rows_count_occurrences_by_chunk():
     assert ("use", 7, "user", 1) in rows
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -136,7 +136,7 @@ Run:
 
 Expected: import failure because `cbv.identifiers` does not exist.
 
-- [ ] **Step 3: Implement `scripts/cbv/identifiers.py`**
+- [x] **Step 3: Implement `scripts/cbv/identifiers.py`**
 
 Create:
 
@@ -181,7 +181,7 @@ def symbol_trigram_rows(chunk_id: int, content: str) -> list[tuple[str, int, str
             for (gram, symbol), occurrences in sorted(counts.items())]
 ```
 
-- [ ] **Step 4: Wire vectorize writes**
+- [x] **Step 4: Wire vectorize writes**
 
 In `scripts/cbv/commands/vectorize.py`, after chunk IDs are known, insert rows:
 
@@ -200,7 +200,7 @@ for chunk_id, c in zip(ids, chunks_buf):
     )
 ```
 
-- [ ] **Step 5: Add vectorize assertion**
+- [x] **Step 5: Add vectorize assertion**
 
 Add to `tests/unit/test_vectorize_cmd.py`:
 
@@ -219,7 +219,7 @@ def test_vectorize_populates_symbol_trigrams(tmp_home, source_repo):
         conn.close()
 ```
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 Run:
 
