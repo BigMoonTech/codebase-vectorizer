@@ -86,8 +86,19 @@ _TS_LOOP_TYPES = frozenset(
     )
 )
 _TS_RETURN_TYPES = frozenset(("return_statement",))
-_TS_BREAK_TYPES = frozenset(("break_statement",))
-_TS_CONTINUE_TYPES = frozenset(("continue_statement",))
+_TS_BREAK_TYPES = frozenset(("break_statement", "break_expression", "break"))
+_TS_CONTINUE_TYPES = frozenset(("continue_statement", "continue_expression", "next"))
+_TS_AUGMENTED_ASSIGNMENT_TYPES = frozenset(
+    (
+        "augmented_assignment_expression",
+        "augmented_assignment_statement",
+        "compound_assignment_expr",
+        "operator_assignment",
+    )
+)
+_TS_AUGMENTED_ASSIGNMENT_OPERATORS = frozenset(
+    ("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "**=", "//=", "&^=")
+)
 _TS_ASSIGNMENT_TYPES = frozenset(
     (
         "assignment_expression",
@@ -95,6 +106,8 @@ _TS_ASSIGNMENT_TYPES = frozenset(
         "short_var_declaration",
         "augmented_assignment_expression",
         "augmented_assignment_statement",
+        "compound_assignment_expr",
+        "operator_assignment",
     )
 )
 _TS_IDENTIFIER_TYPES = frozenset(
@@ -126,6 +139,7 @@ def extract_flow(
 
 
 def extract_python_flow(file_path: str, source: str) -> tuple[list[FlowNode], list[FlowEdge]]:
+    """Legacy Python-only flow entrypoint; prefer extract_flow("python", ...)."""
     tree = ast.parse(source)
     nodes: list[FlowNode] = []
     edges: list[FlowEdge] = []
@@ -780,7 +794,7 @@ def _ts_statement_store_load_names(node, source: bytes) -> tuple[dict[str, int],
     if control.type in _TS_RETURN_TYPES:
         return {}, _ts_load_names(node, source, set())
     stores = _ts_store_names(node, source)
-    excluded_stores = set() if _ts_contains_augmented_assignment(node) else set(stores)
+    excluded_stores = set() if _ts_contains_augmented_assignment(node, source) else set(stores)
     loads = _ts_load_names(node, source, excluded_stores)
     return stores, loads
 
@@ -796,11 +810,25 @@ def _ts_control_node(node):
     return node
 
 
-def _ts_contains_augmented_assignment(node) -> bool:
-    return any(
-        candidate.type in {"augmented_assignment_expression", "augmented_assignment_statement"}
-        for candidate in _ts_descendants(node)
-    )
+def _ts_contains_augmented_assignment(node, source: bytes) -> bool:
+    for candidate in _ts_descendants(node):
+        if candidate.type in _TS_AUGMENTED_ASSIGNMENT_TYPES:
+            return True
+        if candidate.type in {"assignment_expression", "assignment_statement"}:
+            if _ts_assignment_operator(candidate, source) in _TS_AUGMENTED_ASSIGNMENT_OPERATORS:
+                return True
+    return False
+
+
+def _ts_assignment_operator(node, source: bytes) -> str | None:
+    for child in node.children:
+        if not child.is_named and child.type in _TS_AUGMENTED_ASSIGNMENT_OPERATORS:
+            return child.type
+    text = _ts_text(node, source).splitlines()[0]
+    for operator in sorted(_TS_AUGMENTED_ASSIGNMENT_OPERATORS, key=len, reverse=True):
+        if operator in text:
+            return operator
+    return None
 
 
 def _ts_store_names(node, source: bytes) -> dict[str, int]:

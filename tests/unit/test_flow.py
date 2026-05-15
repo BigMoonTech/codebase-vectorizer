@@ -350,6 +350,239 @@ def test_tree_sitter_loop_control_and_augassign_edges_for_javascript():
 
 
 @pytest.mark.parametrize(
+    (
+        "language",
+        "filename",
+        "source",
+        "continue_signature",
+        "break_signature",
+        "after_continue_signature",
+        "after_break_signature",
+        "loop_prefix",
+        "after_loop_signature",
+    ),
+    [
+        (
+            "ruby",
+            "loop.rb",
+            (
+                "def walk(count)\n"
+                "  total = 0\n"
+                "  while count > 0\n"
+                "    count -= 1\n"
+                "    if count == 3\n"
+                "      next\n"
+                "    end\n"
+                "    total += count\n"
+                "    if count == 1\n"
+                "      break\n"
+                "    end\n"
+                "    total += 10\n"
+                "  end\n"
+                "  total\n"
+                "end\n"
+            ),
+            "next",
+            "break",
+            "total += count",
+            "total += 10",
+            "while count > 0",
+            "total",
+        ),
+        (
+            "rust",
+            "loop.rs",
+            (
+                "fn walk(mut count: i32) -> i32 {\n"
+                "    let mut total = 0;\n"
+                "    while count > 0 {\n"
+                "        count -= 1;\n"
+                "        if count == 3 {\n"
+                "            continue;\n"
+                "        }\n"
+                "        total += count;\n"
+                "        if count == 1 {\n"
+                "            break;\n"
+                "        }\n"
+                "        total += 10;\n"
+                "    }\n"
+                "    total\n"
+                "}\n"
+            ),
+            "continue;",
+            "break;",
+            "total += count;",
+            "total += 10;",
+            "while count > 0",
+            "total",
+        ),
+    ],
+)
+def test_tree_sitter_ruby_and_rust_loop_control_edges(
+    language,
+    filename,
+    source,
+    continue_signature,
+    break_signature,
+    after_continue_signature,
+    after_break_signature,
+    loop_prefix,
+    after_loop_signature,
+):
+    nodes, edges = flow.extract_flow(language, filename, source)
+    continue_node = _node_with_exact_signature(nodes, continue_signature)
+    break_node = _node_with_exact_signature(nodes, break_signature)
+    after_continue = _node_with_exact_signature(nodes, after_continue_signature)
+    after_break = _node_with_exact_signature(nodes, after_break_signature)
+    loop_node = next(node for node in nodes if node.signature.strip().startswith(loop_prefix))
+    after_loop = _node_with_exact_signature(nodes, after_loop_signature)
+
+    assert not any(
+        edge.kind == "controls"
+        and edge.src_name == continue_node.name
+        and edge.dst_name == after_continue.name
+        for edge in edges
+    )
+    assert any(
+        edge.kind == "controls"
+        and edge.src_name == continue_node.name
+        and edge.dst_name == loop_node.name
+        for edge in edges
+    )
+    assert not any(
+        edge.kind == "controls"
+        and edge.src_name == break_node.name
+        and edge.dst_name == after_break.name
+        for edge in edges
+    )
+    assert any(
+        edge.kind == "controls"
+        and edge.src_name == break_node.name
+        and edge.dst_name == after_loop.name
+        for edge in edges
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "language",
+        "filename",
+        "source",
+        "entry_name",
+        "aug_signature",
+        "use_signature",
+        "entry_line",
+        "aug_line",
+        "use_line",
+    ),
+    [
+        (
+            "go",
+            "aug.go",
+            (
+                "package flow\n"
+                "func Bump(total int) int {\n"
+                "    total += 1\n"
+                "    return total\n"
+                "}\n"
+            ),
+            "aug.go::Bump#entry",
+            "total += 1",
+            "return total",
+            2,
+            3,
+            4,
+        ),
+        (
+            "rust",
+            "aug.rs",
+            (
+                "fn bump(mut total: i32) -> i32 {\n"
+                "    total += 1;\n"
+                "    total\n"
+                "}\n"
+            ),
+            "aug.rs::bump#entry",
+            "total += 1;",
+            "total",
+            1,
+            2,
+            3,
+        ),
+        (
+            "ruby",
+            "aug.rb",
+            (
+                "def bump(total)\n"
+                "  total += 1\n"
+                "  total\n"
+                "end\n"
+            ),
+            "aug.rb::bump#entry",
+            "total += 1",
+            "total",
+            1,
+            2,
+            3,
+        ),
+        (
+            "cpp",
+            "aug.cpp",
+            (
+                "int bump(int seed) {\n"
+                "  int total = seed;\n"
+                "  total += 1;\n"
+                "  return total;\n"
+                "}\n"
+            ),
+            "aug.cpp::bump#block_1",
+            "total += 1;",
+            "return total;",
+            2,
+            3,
+            4,
+        ),
+    ],
+)
+def test_tree_sitter_augassign_reads_target_and_redefines(
+    language,
+    filename,
+    source,
+    entry_name,
+    aug_signature,
+    use_signature,
+    entry_line,
+    aug_line,
+    use_line,
+):
+    nodes, edges = flow.extract_flow(language, filename, source)
+    aug_node = _node_with_exact_signature(nodes, aug_signature)
+    use_node = _node_with_exact_signature(nodes, use_signature)
+    payloads = [
+        (edge.src_name, edge.dst_name, json.loads(edge.metadata or "{}"))
+        for edge in edges
+        if edge.kind == "dataflow"
+    ]
+
+    assert any(
+        src == entry_name
+        and dst == aug_node.name
+        and payload.get("variable") == "total"
+        and payload.get("definition_line") == entry_line
+        and payload.get("use_line") == aug_line
+        for src, dst, payload in payloads
+    )
+    assert any(
+        src == aug_node.name
+        and dst == use_node.name
+        and payload.get("variable") == "total"
+        and payload.get("definition_line") == aug_line
+        and payload.get("use_line") == use_line
+        for src, dst, payload in payloads
+    )
+
+
+@pytest.mark.parametrize(
     ("language", "filename", "source"),
     [
         ("python", "flow.py", PY_SOURCE),
