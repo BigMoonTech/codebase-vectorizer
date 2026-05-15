@@ -9,11 +9,13 @@ this module. Tree-sitter node types differ across grammars; the mapping
 is a per-language function that takes (node, ancestor_list) and returns
 the cbv kind string. Unknown nodes fall back to "section".
 
-The `cast_chunks()` entry point is added in a later task.
+The `cast_chunks()` entry point recursively splits and merges AST slots
+while preserving the concat invariant.
 """
 from __future__ import annotations
 
 import bisect
+from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence
 
 from cbv.chunker import Chunk, _sha256_hex, _token_count
@@ -252,3 +254,170 @@ def _chunk_from_byte_range(
         content_hash=_sha256_hex(text),
         token_count=_token_count(text),
     )
+
+
+@dataclass
+class _Slot:
+    """Mutable intermediate cAST slot.
+
+    Tracks the byte range plus the representative node, or None when this
+    slot represents a merged sibling group. Slots are converted to Chunk
+    objects at the end of cast_chunks().
+    """
+    start_byte: int
+    end_byte: int
+    node: object
+    parents: List[object]
+
+
+def cast_chunks(
+    tree,
+    source: bytes,
+    *,
+    language_name: str,
+    file_path: str,
+    budget_bytes: int = 1500,
+) -> List[Chunk]:
+    """Apply cAST and return Chunks that tile [0, len(source)).
+
+    The root node is structural, so its children are chunked with the root
+    as parent context. Every other node is emitted whole when it fits the
+    budget, recursively split when it does not, and then greedily merged with
+    adjacent slots when the merged byte range fits.
+    """
+    if not source:
+        return []
+
+    root = tree.root_node
+    slots = _cast_root(
+        root,
+        source=source,
+        budget=budget_bytes,
+        language_name=language_name,
+    )
+    if not slots:
+        return []
+
+    slots[0].start_byte = 0
+    slots[-1].end_byte = len(source)
+
+    line_starts = _line_starts(source)
+    return [
+        _chunk_from_byte_range(
+            s.start_byte,
+            s.end_byte,
+            node=s.node,
+            parents=s.parents,
+            language_name=language_name,
+            file_path=file_path,
+            source=source,
+            line_starts=line_starts,
+        )
+        for s in slots
+    ]
+
+
+def _cast_root(root, *, source: bytes, budget: int, language_name: str) -> List[_Slot]:
+    """Split/merge the root's children while using root as parent context."""
+    children = [c for c in root.children if c.end_byte > c.start_byte]
+    if not children:
+        return _cast(
+            root,
+            parents=[],
+            source=source,
+            budget=budget,
+            language_name=language_name,
+        )
+
+    out: List[_Slot] = []
+    parents = [root]
+    for child in children:
+        if child.end_byte - child.start_byte > budget:
+            out.extend(
+                _cast(
+                    child,
+                    parents=parents,
+                    source=source,
+                    budget=budget,
+                    language_name=language_name,
+                )
+            )
+        else:
+            out.append(_Slot(child.start_byte, child.end_byte, child, list(parents)))
+
+    merged = _greedy_merge_slots(out, budget)
+    _tile_slots_to_range(merged, root.start_byte, root.end_byte)
+    return merged
+
+
+def _cast(node, *, parents, source: bytes, budget: int, language_name: str) -> List[_Slot]:
+    """Recursive split-then-merge for one non-root node."""
+    size = node.end_byte - node.start_byte
+    if size <= budget:
+        return [_Slot(node.start_byte, node.end_byte, node, list(parents))]
+
+    children = [c for c in node.children if c.end_byte > c.start_byte]
+    if not children:
+        return [_Slot(node.start_byte, node.end_byte, node, list(parents))]
+
+    next_parents = list(parents) + [node]
+    out: List[_Slot] = []
+    for child in children:
+        if child.end_byte - child.start_byte > budget:
+            out.extend(
+                _cast(
+                    child,
+                    parents=next_parents,
+                    source=source,
+                    budget=budget,
+                    language_name=language_name,
+                )
+            )
+        else:
+            out.append(_Slot(child.start_byte, child.end_byte, child, list(next_parents)))
+
+    merged = _greedy_merge_slots(out, budget)
+    _tile_slots_to_range(merged, node.start_byte, node.end_byte)
+    return merged
+
+
+def _greedy_merge_slots(slots: List[_Slot], budget: int) -> List[_Slot]:
+    """Merge consecutive slots while the combined byte range fits budget."""
+    out: List[_Slot] = []
+    current: Optional[_Slot] = None
+
+    for slot in slots:
+        if current is None:
+            current = _Slot(
+                slot.start_byte,
+                slot.end_byte,
+                slot.node,
+                list(slot.parents),
+            )
+            continue
+
+        if slot.end_byte - current.start_byte <= budget:
+            current.end_byte = slot.end_byte
+            current.node = None
+        else:
+            out.append(current)
+            current = _Slot(
+                slot.start_byte,
+                slot.end_byte,
+                slot.node,
+                list(slot.parents),
+            )
+
+    if current is not None:
+        out.append(current)
+    return out
+
+
+def _tile_slots_to_range(slots: List[_Slot], start_byte: int, end_byte: int) -> None:
+    """Mutate slots so adjacent ranges exactly cover the parent range."""
+    if not slots:
+        return
+    slots[0].start_byte = start_byte
+    for left, right in zip(slots, slots[1:]):
+        left.end_byte = right.start_byte
+    slots[-1].end_byte = end_byte

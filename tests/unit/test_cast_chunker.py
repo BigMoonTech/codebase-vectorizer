@@ -217,3 +217,132 @@ def test_chunk_from_node_top_level_statement():
     assert chunk.kind == "section"
     assert chunk.name is None
     assert chunk.ast_path == "module/section"
+
+
+def test_chunk_from_byte_range_node_none_emits_section_with_content_hash():
+    src = b"import os\nx = 1\n"
+    tree = _parse_python(src)
+    line_starts = cast_chunker._line_starts(src)
+    chunk = cast_chunker._chunk_from_byte_range(
+        0, len(src),
+        node=None, parents=[tree.root_node],
+        language_name="python", file_path="x.py",
+        source=src, line_starts=line_starts,
+    )
+    assert chunk.kind == "section"
+    assert chunk.name is None
+    assert chunk.ast_path == "module/section"
+    assert chunk.content == src.decode("utf-8")
+    assert chunk.content_hash == cast_chunker._sha256_hex(chunk.content)
+
+
+def test_cast_chunks_concat_invariant_tiny_file():
+    src = b"def foo():\n    pass\n"
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="x.py", budget_bytes=1500,
+    )
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == src
+
+
+def test_cast_chunks_concat_invariant_multiple_functions():
+    src = (
+        b"def a():\n    return 1\n"
+        b"def b():\n    return 2\n"
+        b"def c():\n    return 3\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="x.py", budget_bytes=1500,
+    )
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == src
+
+
+def test_cast_chunks_concat_invariant_contiguous_byte_ranges():
+    """Chunk byte ranges must tile [0, len(source)) contiguously."""
+    src = (
+        b"import os\n"
+        b"\n"
+        b"def foo():\n    return 1\n"
+        b"\n"
+        b"def bar():\n    return 2\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="x.py", budget_bytes=1500,
+    )
+    assert chunks, "expected at least one chunk"
+    assert chunks[0].start_byte == 0
+    assert chunks[-1].end_byte == len(src)
+    for a, b in zip(chunks, chunks[1:]):
+        assert a.end_byte == b.start_byte, \
+            f"gap between {a.end_byte} and {b.start_byte}"
+
+
+def test_cast_chunks_single_function_under_budget_is_one_chunk():
+    src = b"def foo():\n    return 42\n"
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="x.py", budget_bytes=1500,
+    )
+    assert len(chunks) == 1
+    assert chunks[0].kind == "function"
+    assert chunks[0].name == "foo"
+
+
+def test_cast_chunks_splits_when_over_budget():
+    """A class containing several methods, each under budget but together
+    exceeding it, should split into multiple chunks."""
+    src = (
+        b"class C:\n"
+        b"    def aaa(self):\n        return 'aaaaa'\n"
+        b"    def bbb(self):\n        return 'bbbbb'\n"
+        b"    def ccc(self):\n        return 'ccccc'\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="x.py", budget_bytes=60,
+    )
+    assert len(chunks) > 1
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == src
+    # At least one chunk should be a method.
+    assert any(c.kind == "method" for c in chunks)
+
+
+def test_cast_chunks_oversized_leaf_emits_overbudget_chunk():
+    """A single deeply-leaf node bigger than budget still emits as one
+    chunk (no further split possible)."""
+    src = b"x = '" + (b"X" * 5000) + b"'\n"
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="x.py", budget_bytes=100,
+    )
+    # Concat still holds; some chunk(s) are over-budget.
+    assert b"".join(c.content.encode("utf-8") for c in chunks) == src
+    assert max(len(c.content.encode("utf-8")) for c in chunks) > 100
+
+
+def test_cast_chunks_empty_source_returns_no_chunks():
+    src = b""
+    tree = _parse_python(src)
+    chunks = cast_chunker.cast_chunks(
+        tree, src,
+        language_name="python", file_path="x.py", budget_bytes=1500,
+    )
+    assert chunks == []
+
+
+def test_cast_chunks_method_chunk_has_method_path():
+    """A chunk emitted for a method-sized class should preserve ast_path."""
+    src = (
+        b"class Big:\n"
+        b"    def first(self):\n        " + b"x = 1\n        " * 60 + b"\n"
+        b"    def second(self):\n        return 2\n"
+    )
+    chunks = cast_chunker.cast_chunks(
+        _parse_python(src), src,
+        language_name="python", file_path="x.py", budget_bytes=80,
+    )
+    paths = [c.ast_path for c in chunks]
+    # At least one chunk should be inside class Big (its ast_path contains 'class[Big]').
+    assert any("class[Big]" in p for p in paths), f"paths: {paths}"
