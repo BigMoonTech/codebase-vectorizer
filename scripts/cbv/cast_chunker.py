@@ -135,7 +135,7 @@ CLASS_NODE_TYPES: dict[str, frozenset[str]] = {
     "typescript": frozenset(("class", "class_declaration", "interface_declaration")),
     "tsx": frozenset(("class", "class_declaration", "interface_declaration")),
     "go": frozenset(),
-    "rust": frozenset(("impl_item", "struct_item", "trait_item")),
+    "rust": frozenset(("enum_item", "impl_item", "struct_item", "trait_item")),
     "java": frozenset(
         (
             "class_declaration",

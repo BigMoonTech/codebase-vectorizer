@@ -673,6 +673,7 @@ def test_rust_impl_function_emits_method_chunk_with_impl_path():
         ("tsx", b"class C {}\n", "class", "class"),
         ("rust", b"struct C;\n", "struct_item", "class"),
         ("rust", b"trait T { fn tick(&self); }\n", "trait_item", "class"),
+        ("rust", b"enum E { A }\n", "enum_item", "class"),
         ("java", b"enum E { A }\n", "enum_declaration", "class"),
         ("java", b"record R(int x) {}\n", "record_declaration", "class"),
         ("c", b"struct C { int x; };\n", "struct_specifier", "class"),
