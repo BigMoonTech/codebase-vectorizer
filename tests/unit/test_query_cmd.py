@@ -103,6 +103,29 @@ def test_query_reranks_candidate_rows_before_top_k(indexed_repo, capsys, monkeyp
     assert blob["refined_queries"] == []
 
 
+def test_fast_lane_does_not_instantiate_reranker(indexed_repo, capsys, monkeypatch):
+    def fail_make_reranker():
+        raise AssertionError("fast lane must not instantiate reranker")
+
+    monkeypatch.setattr(query_cmd.reranker, "make_reranker", fail_make_reranker)
+    ns = argparse.Namespace(
+        repo=indexed_repo,
+        question="authenticate_user",
+        top_k=1,
+        lane="fast",
+    )
+
+    rc = query_cmd.run(ns)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    blob = json.loads([l for l in out.strip().splitlines() if l.strip()][-1])
+    assert blob["pipeline_used"] == "fast"
+    assert blob["reranker_model"] is None
+    assert blob["refined_queries"] == []
+    assert len(blob["results"]) <= 1
+
+
 def test_refined_queries_return_original_query_when_no_rows():
     assert query_cmd._refined_queries("where is auth", []) == ["where is auth"]
 
