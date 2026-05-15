@@ -1598,7 +1598,7 @@ This task creates the first working flow path. It is not the final completion ba
 - Modify: `scripts/cbv/commands/vectorize.py`
 - Modify: `scripts/cbv/commands/relate.py`
 
-- [ ] **Step 1: Add flow fixture**
+- [x] **Step 1: Add flow fixture**
 
 Create `tests/fixtures/flow-heavy/flow_app.py`:
 
@@ -1612,7 +1612,7 @@ def decide(user, amount):
     return approved
 ```
 
-- [ ] **Step 2: Implement conservative Python flow extraction**
+- [x] **Step 2: Implement conservative Python flow extraction**
 
 Create `scripts/cbv/flow.py`:
 
@@ -1668,7 +1668,7 @@ def extract_python_flow(file_path: str, source: str) -> tuple[list[FlowNode], li
     return nodes, edges
 ```
 
-- [ ] **Step 3: Wire vectorize and relate flow verbs**
+- [x] **Step 3: Wire vectorize and relate flow verbs**
 
 For Python files, write `FlowNode` rows as `kind='block'`, `parent_id` pointing to the function node, and `FlowEdge` rows as `controls`, `guards`, or `dataflow`.
 
@@ -1680,7 +1680,7 @@ Extend `relate` verbs with:
 
 For this bootstrap task, `conditions-for <symbol>` returns matching `guards` and `dataflow` metadata rows in the same function. Task 10A replaces this with the full CFG/DFG-backed path required by the spec.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run:
 

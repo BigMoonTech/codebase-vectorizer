@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation commit: `fe711ff slice 6 t2: make incremental updates atomic`
+- Latest confirmed implementation commit: `f11e5af slice 7 t1: guard flow scope edges`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -52,6 +52,10 @@
   - `e1f2217 slice 6 t2: protect incremental rebuilds`
   - `89b326a slice 6 t2: protect legacy merkle backfills`
   - `fe711ff slice 6 t2: make incremental updates atomic`
+  - `24b2037 docs: mark task 9 complete`
+  - `2adaae3 slice 7 t1: add python flow graph bootstrap`
+  - `7ab6daf slice 7 t1: harden python flow bootstrap`
+  - `f11e5af slice 7 t1: guard flow scope edges`
 - `main` is preserved and should stay preserved.
 - Slice 1 is implemented, merged into `dev`, and pushed.
 - Slice 2 is implemented, merged into `dev` with `--no-ff`, verified, cleaned up, and pushed.
@@ -60,7 +64,7 @@
 
 ## Current Working State
 
-This handoff was updated after Task 9 approval:
+This handoff was updated after Task 10 approval:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
@@ -73,6 +77,7 @@ This handoff was updated after Task 9 approval:
 - Task 7 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 8 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 9 is implemented, reviewed, committed, and marked complete in the final completion plan.
+- Task 10 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2A landed across:
   - `c1cd773 slice 3 t2a: complete tags-based tier-a symbol extraction`
   - `f9a3a41 slice 3 t2a: address tag query review`
@@ -172,11 +177,25 @@ This handoff was updated after Task 9 approval:
   - Modified-file chunk failures preserve old chunks/Merkle and avoid graph nodes from failed current source.
   - Update-mode destructive writes, chunk inserts, vector inserts, Merkle writes, graph rebuild, PageRank, and meta writes now run in one SQLite transaction.
   - `graph.compute_pagerank` participates in the caller's transaction for rollback safety.
+- Task 10 landed across:
+  - `2adaae3 slice 7 t1: add python flow graph bootstrap`
+  - `7ab6daf slice 7 t1: harden python flow bootstrap`
+  - `f11e5af slice 7 t1: guard flow scope edges`
+- Task 10 review fixes include:
+  - `scripts/cbv/flow.py` adds the Python bootstrap flow extractor with statement block nodes, sequential `controls`, `guards` predicate metadata, and basic `dataflow` metadata.
+  - `tests/fixtures/flow-heavy/flow_app.py` exercises the initial `decide(user, amount)` flow path.
+  - `vectorize` writes Python block nodes and flow edges, links block `parent_id` to function/method symbols, reports `nodes_block` and `edges_flow`, and keeps flow extraction failures non-fatal.
+  - Flow writes preserve Task 9 transaction behavior.
+  - Duplicate dataflow metadata for the same `(src, dst, kind)` is aggregated without a schema change so multiple variables remain queryable.
+  - Python method and nested-function flow parent symbols now match symbol graph names such as `file.py::Class::method` and `file.py::outer::inner`.
+  - Nested function, class, lambda, and comprehension scopes are pruned from outer-function dataflow.
+  - Symbol extraction failure no longer creates orphan block nodes or flow edges.
+  - `relate` flow verbs now return useful JSON over indexed flow rows while preserving the clean `flow not indexed` fallback.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Milestone 5 Task 10: Python CFG/DFG bootstrap for flow-heavy questions.
+- Next action is Milestone 5 Task 10A: spec-complete intra-procedural CFG/DFG coverage and flow relate verbs.
 
 ## Verified Baseline
 
@@ -235,6 +254,11 @@ Latest verification in the current session:
 - Task 9 whitespace check: `git diff --check f0e034a..HEAD` reported no issues.
 - Task 9 targeted spec re-review approved with no findings.
 - Task 9 targeted code-quality re-review approved with no findings after probing rollback during PageRank, rollback after meta writes, and update-mode `--no-cache`.
+- Task 10 focused verification after final scope fix: `74 passed`.
+- Task 10 full-suite regression after final scope fix: `386 passed, 1 skipped`.
+- Task 10 whitespace check: `git diff --check 24b2037..HEAD` reported no issues.
+- Task 10 targeted spec re-review approved with no findings.
+- Task 10 targeted code-quality re-review approved with no findings.
 
 ## What Exists Today
 
@@ -272,6 +296,7 @@ Current Slice 3/Milestone 1 work adds:
 - Full-lane reranking, query-time `reranker_model`, and low-confidence `refined_queries` hints.
 - Cross-repo content-hash embedding cache with `--no-cache`, hit-rate reporting, wrong-length fallback, and stale-schema migration.
 - Merkle incremental indexing with `vectorize --update`, safe Merkle backfill, retryable chunk failures, and transactional update writes.
+- Python bootstrap flow indexing with block nodes, `controls`/`guards`/`dataflow` edges, vectorize flow counts, and useful flow relate JSON.
 
 Important implementation detail:
 
@@ -287,7 +312,7 @@ The spec is authoritative over all plans. The final completion plan has been rev
 
 Spec-required surfaces still to implement:
 
-1. Intra-procedural CFG/DFG flow edges and useful flow relate results beyond fallback.
+1. Spec-complete intra-procedural CFG/DFG flow coverage beyond the Python bootstrap, including Tier-A best effort and full flow relate result fields.
 2. UMAP + HDBSCAN concept clusters with LLM labels and spec-defined fallback.
 3. One-pass LLM `ARCHITECTURE.md` with spec-defined fallback.
 4. CoIR/RepoEval-style benchmark metrics and `bench/results.json`.
@@ -317,9 +342,9 @@ User requested:
 
 Recommended next action:
 
-1. Begin Milestone 5 Task 10 for Python CFG/DFG bootstrap for flow-heavy questions.
-2. After Task 10 implementation, verification, and review pass, mark Task 10 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
-3. Continue with Task 10A for spec-complete flow extraction.
+1. Begin Milestone 5 Task 10A for spec-complete intra-procedural CFG/DFG coverage and flow relate verbs.
+2. After Task 10A implementation, verification, and review pass, mark Task 10A complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+3. Continue with Task 11 for concept clusters.
 4. After each task is safely done, edit the plan to mark completed checklist items.
 5. Run each task's verification command before committing.
 6. Run the final full verification gate before calling v1.0 code-complete.
