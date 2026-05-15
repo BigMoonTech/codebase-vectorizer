@@ -583,6 +583,52 @@ def test_tree_sitter_augassign_reads_target_and_redefines(
 
 
 @pytest.mark.parametrize(
+    ("language", "filename", "entry_name"),
+    [
+        ("c", "aug.c", "aug.c::bump#entry"),
+        ("cpp", "aug.cpp", "aug.cpp::bump#entry"),
+    ],
+)
+def test_tree_sitter_c_family_parameters_seed_augassign_target_reads(
+    language,
+    filename,
+    entry_name,
+):
+    source = (
+        "int bump(int total) {\n"
+        "  total += 1;\n"
+        "  return total;\n"
+        "}\n"
+    )
+
+    nodes, edges = flow.extract_flow(language, filename, source)
+    aug_node = _node_with_exact_signature(nodes, "total += 1;")
+    return_node = _node_with_exact_signature(nodes, "return total;")
+    payloads = [
+        (edge.src_name, edge.dst_name, json.loads(edge.metadata or "{}"))
+        for edge in edges
+        if edge.kind == "dataflow"
+    ]
+
+    assert any(
+        src == entry_name
+        and dst == aug_node.name
+        and payload.get("variable") == "total"
+        and payload.get("definition_line") == 1
+        and payload.get("use_line") == 2
+        for src, dst, payload in payloads
+    )
+    assert any(
+        src == aug_node.name
+        and dst == return_node.name
+        and payload.get("variable") == "total"
+        and payload.get("definition_line") == 2
+        and payload.get("use_line") == 3
+        for src, dst, payload in payloads
+    )
+
+
+@pytest.mark.parametrize(
     ("language", "filename", "source"),
     [
         ("python", "flow.py", PY_SOURCE),

@@ -759,30 +759,49 @@ def _ts_branch_bodies(node) -> list[object | None]:
 
 
 def _ts_parameter_names(node, source: bytes) -> list[str]:
-    params = node.child_by_field_name("parameters") or node.child_by_field_name("parameter")
-    if params is None:
-        for child in node.children:
-            if child.type in {"formal_parameters", "parameter_list", "parameters"}:
-                params = child
-                break
+    params = _ts_parameter_list_node(node)
     if params is None:
         return []
     names: list[str] = []
     for child in params.children:
         if not child.is_named:
             continue
-        if child.type in _TS_IDENTIFIER_TYPES:
-            names.append(_ts_text(child, source))
-            continue
-        name = child.child_by_field_name("name")
-        if name is not None:
-            names.append(_ts_text(name, source))
-            continue
-        for grandchild in child.children:
-            if grandchild.type in _TS_IDENTIFIER_TYPES:
-                names.append(_ts_text(grandchild, source))
-                break
+        name = _ts_parameter_name(child, source)
+        if name:
+            names.append(name)
     return [name for name in names if name]
+
+
+def _ts_parameter_list_node(node):
+    params = node.child_by_field_name("parameters") or node.child_by_field_name("parameter")
+    if params is not None:
+        return params
+    for child in node.children:
+        if not child.is_named or child.type in _TS_BLOCK_TYPES:
+            continue
+        if child.type in {"formal_parameters", "parameter_list", "parameters"}:
+            return child
+        params = _ts_parameter_list_node(child)
+        if params is not None:
+            return params
+    return None
+
+
+def _ts_parameter_name(node, source: bytes) -> str | None:
+    if node.type in _TS_IDENTIFIER_TYPES:
+        return _ts_text(node, source)
+    for field_name in ("name", "declarator"):
+        child = node.child_by_field_name(field_name)
+        if child is None:
+            continue
+        identifiers = _ts_identifier_descendants(child)
+        if identifiers:
+            return _ts_text(identifiers[-1], source)
+        return _ts_last_name_part(_ts_text(child, source))
+    identifiers = _ts_identifier_descendants(node)
+    if identifiers:
+        return _ts_text(identifiers[0], source)
+    return None
 
 
 def _ts_statement_store_load_names(node, source: bytes) -> tuple[dict[str, int], dict[str, int]]:
