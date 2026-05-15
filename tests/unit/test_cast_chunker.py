@@ -566,14 +566,14 @@ def test_cast_chunks_cross_method_merge_uses_class_section_path():
             b"int add(int a) { return a; }\n",
             "int add",
             "function",
-            None,
+            "add",
         ),
         (
             "cpp",
             b"int add(int a) { return a; }\n",
             "int add",
             "function",
-            None,
+            "add",
         ),
         (
             "ruby",
@@ -612,6 +612,33 @@ def test_kind_mapping_per_language(
     chunk = matching_chunks[0]
     assert chunk.kind == expected_kind
     assert chunk.name == expected_name
+    if language_name in ("c", "cpp"):
+        assert chunk.ast_path == "module/function[add]"
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source"),
+    [
+        ("c", b"int add(int a) { return a; }\n"),
+        ("cpp", b"int add(int a) { return a; }\n"),
+    ],
+)
+def test_c_function_chunks_extract_declarator_name(language_name, source):
+    tree = _parse_language(language_name, source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=1500,
+    )
+
+    function_chunks = [chunk for chunk in chunks if chunk.kind == "function"]
+    assert function_chunks, chunks
+    assert any(
+        chunk.name == "add" and chunk.ast_path == "module/function[add]"
+        for chunk in function_chunks
+    )
 
 
 @pytest.mark.parametrize(
@@ -764,6 +791,64 @@ def test_assigned_function_chunks_use_declarator_name(
         chunk.ast_path == f"module/function[{expected_name}]"
         for chunk in function_chunks
     )
+
+
+@pytest.mark.parametrize(
+    ("language_name", "source", "budget_bytes", "expected_kind", "expected_path"),
+    [
+        (
+            "javascript",
+            b"const handlers = { login: () => 1 };\n",
+            1500,
+            "function",
+            "module/function[login]",
+        ),
+        (
+            "javascript",
+            b"class C { login = () => 1 }\n",
+            12,
+            "method",
+            "module/class[C]/method[login]",
+        ),
+        (
+            "typescript",
+            b"class C { login = () => 1 }\n",
+            12,
+            "method",
+            "module/class[C]/method[login]",
+        ),
+        (
+            "tsx",
+            b"class C { login = () => 1 }\n",
+            12,
+            "method",
+            "module/class[C]/method[login]",
+        ),
+    ],
+)
+def test_assigned_function_chunks_use_property_name(
+    language_name,
+    source,
+    budget_bytes,
+    expected_kind,
+    expected_path,
+):
+    tree = _parse_language(language_name, source)
+    chunks = cast_chunker.cast_chunks(
+        tree,
+        source,
+        language_name=language_name,
+        file_path=f"x.{language_name}",
+        budget_bytes=budget_bytes,
+    )
+
+    matching_chunks = [
+        chunk
+        for chunk in chunks
+        if chunk.kind == expected_kind and chunk.name == "login"
+    ]
+    assert matching_chunks, chunks
+    assert any(chunk.ast_path == expected_path for chunk in matching_chunks)
 
 
 def test_typescript_interface_and_method_signature_are_class_and_method():

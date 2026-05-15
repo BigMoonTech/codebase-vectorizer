@@ -82,6 +82,16 @@ _JAVASCRIPT_FAMILY_LANGUAGES = frozenset(("javascript", "typescript", "tsx"))
 _JAVASCRIPT_NAME_NODE_TYPES = frozenset(
     ("identifier", "private_property_identifier", "property_identifier")
 )
+_C_CPP_LANGUAGES = frozenset(("c", "cpp"))
+_C_CPP_NAME_NODE_TYPES = frozenset(
+    (
+        "identifier",
+        "field_identifier",
+        "qualified_identifier",
+        "destructor_name",
+        "operator_name",
+    )
+)
 
 
 def _same_node(left, right) -> bool:
@@ -104,6 +114,56 @@ def _extract_identifier_text(node, source: bytes) -> Optional[str]:
         )
     except Exception:
         return None
+
+
+def _extract_c_cpp_identifier_text(node, source: bytes) -> Optional[str]:
+    if node is None or node.type not in _C_CPP_NAME_NODE_TYPES:
+        return None
+    try:
+        return source[node.start_byte:node.end_byte].decode(
+            "utf-8",
+            errors="replace",
+        )
+    except Exception:
+        return None
+
+
+def _extract_c_cpp_declarator_identifier(declarator, source: bytes) -> Optional[str]:
+    name = _extract_c_cpp_identifier_text(declarator, source)
+    if name is not None:
+        return name
+
+    nested = declarator.child_by_field_name("declarator") if declarator else None
+    if nested is not None:
+        name = _extract_c_cpp_declarator_identifier(nested, source)
+        if name is not None:
+            return name
+
+    if declarator is None:
+        return None
+
+    for child in declarator.children:
+        if child.is_named:
+            name = _extract_c_cpp_identifier_text(child, source)
+            if name is not None:
+                return name
+
+    for child in declarator.children:
+        if child.is_named:
+            name = _extract_c_cpp_declarator_identifier(child, source)
+            if name is not None:
+                return name
+
+    return None
+
+
+def _extract_c_cpp_function_name(node, source: bytes) -> Optional[str]:
+    if node.type != "function_definition":
+        return None
+    return _extract_c_cpp_declarator_identifier(
+        node.child_by_field_name("declarator"),
+        source,
+    )
 
 
 def _direct_function_value_matches(value_node, function_node) -> bool:
@@ -159,6 +219,23 @@ def _extract_js_assigned_function_name(node, parents, source: bytes) -> Optional
                     source,
                 )
 
+        if parent.type == "pair":
+            value = parent.child_by_field_name("value")
+            if _direct_function_value_matches(value, node):
+                return _extract_identifier_text(
+                    parent.child_by_field_name("key"),
+                    source,
+                )
+
+        if parent.type in ("field_definition", "public_field_definition"):
+            value = parent.child_by_field_name("value")
+            if _direct_function_value_matches(value, node):
+                return _extract_identifier_text(
+                    parent.child_by_field_name("name")
+                    or parent.child_by_field_name("property"),
+                    source,
+                )
+
         if parent.type == "assignment_expression":
             right = parent.child_by_field_name("right")
             if _direct_function_value_matches(right, node):
@@ -179,6 +256,8 @@ def _extract_name_with_parents(
     direct_name = _extract_name(node, source)
     if direct_name is not None:
         return direct_name
+    if language in _C_CPP_LANGUAGES:
+        return _extract_c_cpp_function_name(node, source)
     if language in _JAVASCRIPT_FAMILY_LANGUAGES:
         return _extract_js_assigned_function_name(node, parents, source)
     return None
