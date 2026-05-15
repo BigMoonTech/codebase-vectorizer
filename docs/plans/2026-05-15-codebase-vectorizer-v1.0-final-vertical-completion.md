@@ -2253,7 +2253,8 @@ Expected:
 - graph and flow aliases return JSON with `results`;
 - stats returns counts;
 - bench writes/prints result JSON;
-- update run completes and reports a nonzero cache hit rate.
+- update run completes; for this no-change smoke fixture, `embedding_cache_hit_rate`
+  reports `0.0` because no cache lookups occur.
 
 - [ ] **Step 3: Inspect final git state**
 
