@@ -116,6 +116,38 @@ def _extract_identifier_text(node, source: bytes) -> Optional[str]:
         return None
 
 
+def _extract_js_static_string_property_name(node, source: bytes) -> Optional[str]:
+    if node is None or node.type != "string":
+        return None
+
+    fragments: List[str] = []
+    for child in node.children:
+        if not child.is_named:
+            continue
+        if child.type != "string_fragment":
+            return None
+        try:
+            fragments.append(
+                source[child.start_byte:child.end_byte].decode(
+                    "utf-8",
+                    errors="replace",
+                )
+            )
+        except Exception:
+            return None
+
+    if not fragments:
+        return None
+    return "".join(fragments)
+
+
+def _extract_js_property_name(node, source: bytes) -> Optional[str]:
+    identifier_name = _extract_identifier_text(node, source)
+    if identifier_name is not None:
+        return identifier_name
+    return _extract_js_static_string_property_name(node, source)
+
+
 def _extract_c_cpp_identifier_text(node, source: bytes) -> Optional[str]:
     if node is None or node.type not in _C_CPP_NAME_NODE_TYPES:
         return None
@@ -191,18 +223,27 @@ def _extract_js_assignment_left_name(left_node, source: bytes) -> Optional[str]:
     if left_node is None:
         return None
 
-    direct_name = _extract_identifier_text(left_node, source)
+    direct_name = _extract_js_property_name(left_node, source)
     if direct_name is not None:
         return direct_name
 
     if left_node.type == "member_expression":
         property_node = left_node.child_by_field_name("property")
-        property_name = _extract_identifier_text(property_node, source)
+        property_name = _extract_js_property_name(property_node, source)
         if property_name is not None:
             return property_name
 
         for child in reversed(left_node.children):
-            child_name = _extract_identifier_text(child, source)
+            child_name = _extract_js_property_name(child, source)
+            if child_name is not None:
+                return child_name
+
+    if left_node.type == "subscript_expression":
+        object_node = left_node.child_by_field_name("object")
+        for child in reversed(left_node.children):
+            if _same_node(child, object_node):
+                continue
+            child_name = _extract_js_static_string_property_name(child, source)
             if child_name is not None:
                 return child_name
 
@@ -222,7 +263,7 @@ def _extract_js_assigned_function_name(node, parents, source: bytes) -> Optional
         if parent.type == "pair":
             value = parent.child_by_field_name("value")
             if _direct_function_value_matches(value, node):
-                return _extract_identifier_text(
+                return _extract_js_property_name(
                     parent.child_by_field_name("key"),
                     source,
                 )
@@ -230,7 +271,7 @@ def _extract_js_assigned_function_name(node, parents, source: bytes) -> Optional
         if parent.type in ("field_definition", "public_field_definition"):
             value = parent.child_by_field_name("value")
             if _direct_function_value_matches(value, node):
-                return _extract_identifier_text(
+                return _extract_js_property_name(
                     parent.child_by_field_name("name")
                     or parent.child_by_field_name("property"),
                     source,
