@@ -368,11 +368,18 @@ def test_flow_relate_verbs_return_indexed_flow_json(
             for result in blob["results"]
         )
     if "guards" in expected_kinds:
-        assert any(
-            result["edge_kind"] == "guards"
-            and "user.is_admin" in json.dumps(result["metadata"])
-            for result in blob["results"]
-        )
+        if verb == "conditions-for":
+            assert any(
+                result["edge_kind"] == "dataflow"
+                and "user.is_admin" in json.dumps(result["guards"])
+                for result in blob["results"]
+            )
+        else:
+            assert any(
+                result["edge_kind"] == "guards"
+                and "user.is_admin" in json.dumps(result["metadata"])
+                for result in blob["results"]
+            )
 
 
 def test_flow_relate_verbs_return_semantic_paths_and_slices(
@@ -441,6 +448,34 @@ def test_flow_relate_verbs_return_semantic_paths_and_slices(
     assert any(
         "flag" in result["guards"] and "x" in result["variables"]
         for result in conditions_blob["results"]
+    )
+    assert all(
+        result["src"]["short_name"] in result["path"]
+        and result["dst"]["short_name"] in result["path"]
+        for result in conditions_blob["results"]
+    )
+    assert any(
+        result["metadata"].get("definition_line") == 4
+        and result["path"].index(result["src"]["short_name"])
+        < result["path"].index(result["dst"]["short_name"])
+        and "flag" in result["guards"]
+        for result in conditions_blob["results"]
+    )
+
+    rc, symbol_conditions_blob, _ = _run(_ns(repo, "conditions-for", "x", hops=6), capsys)
+    assert rc == 0
+    assert symbol_conditions_blob["warnings"] == []
+    assert symbol_conditions_blob["results"]
+    assert all(
+        result["edge_kind"] == "dataflow"
+        and result["src"]["short_name"] in result["path"]
+        and result["dst"]["short_name"] in result["path"]
+        for result in symbol_conditions_blob["results"]
+    )
+    assert any(
+        result["metadata"].get("definition_line") == 4
+        and "flag" in result["guards"]
+        for result in symbol_conditions_blob["results"]
     )
 
 

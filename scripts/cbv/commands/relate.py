@@ -349,14 +349,13 @@ def _flow_query(
                 hops=hops,
             )
         if node_ids:
-            return _flow_edges(
+            rows = _dataflow_rows_for_node_ids(
                 conn,
                 node_ids,
-                incoming=None,
-                kinds=("guards", "dataflow"),
-                top_k=top_k,
+                top_k=top_k * 4,
             )
-        return _conditions_for_metadata(conn, query, top_k=top_k)
+            return _conditions_for_rows(conn, query, rows, top_k=top_k, hops=hops)
+        return _conditions_for_metadata(conn, query, top_k=top_k, hops=hops)
     if not node_ids:
         return []
     line_range = _parse_line_range(target)
@@ -492,17 +491,20 @@ def _conditions_for_site(
         line_kind="use_line",
         top_k=top_k * 4,
     )
+    return _conditions_for_rows(conn, variable, rows, top_k=top_k, hops=hops)
+
+
+def _conditions_for_rows(
+    conn,
+    variable: str,
+    rows,
+    *,
+    top_k: int,
+    hops: int,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for row in rows:
-        dst = _node_detail(conn, int(row[1]))
-        function = _function_for_flow_node(conn, dst)
-        path_ids = (
-            _entry_path_to(conn, int(function["id"]), int(dst["id"]), hops=hops)
-            if function is not None
-            else None
-        )
-        if path_ids is None:
-            path_ids = _control_path_between(conn, int(row[0]), int(row[1]), hops=hops) or [int(row[0]), int(row[1])]
+        path_ids = _dataflow_producing_path(conn, int(row[0]), int(row[1]), hops=hops)
         result = _flow_edge_result(
             conn,
             row,
@@ -591,27 +593,21 @@ def _flow_edges_matching_metadata(
     return results[:top_k]
 
 
-def _conditions_for_metadata(conn, query: str, *, top_k: int) -> list[dict[str, Any]]:
-    dataflow_results = _flow_edges_matching_metadata(
+def _conditions_for_metadata(
+    conn,
+    query: str,
+    *,
+    top_k: int,
+    hops: int,
+) -> list[dict[str, Any]]:
+    rows = _matching_dataflow_rows(
         conn,
         query,
-        kinds=("dataflow",),
-        top_k=top_k,
+        line=None,
+        line_kind=None,
+        top_k=top_k * 4,
     )
-    function_ids = {
-        result["function"]["id"]
-        for result in dataflow_results
-        if result.get("function") is not None
-    }
-    guard_results = _flow_edges_for_functions(
-        conn,
-        function_ids,
-        kinds=("guards",),
-        top_k=top_k,
-    )
-    dataflow_limit = max(1, top_k - len(guard_results)) if dataflow_results else 0
-    merged = dataflow_results[:dataflow_limit] + guard_results
-    return merged[:top_k]
+    return _conditions_for_rows(conn, query, rows, top_k=top_k, hops=hops)
 
 
 def _flow_edges_for_functions(
@@ -638,8 +634,8 @@ def _matching_dataflow_rows(
     conn,
     variable: str,
     *,
-    line: int,
-    line_kind: str,
+    line: int | None,
+    line_kind: str | None,
     top_k: int,
 ):
     rows = conn.execute(
@@ -656,10 +652,55 @@ def _matching_dataflow_rows(
     for row in rows:
         metadata = _parse_metadata(row[4])
         for item in _metadata_items(metadata):
-            if item.get("variable") == variable and item.get(line_kind) == line:
-                matched.append(row)
-                break
+            if item.get("variable") != variable:
+                continue
+            if line is not None and item.get(line_kind) != line:
+                continue
+            matched.append(row)
+            break
     return matched
+
+
+def _dataflow_rows_for_node_ids(conn, node_ids: list[int], *, top_k: int):
+    if not node_ids:
+        return []
+    node_placeholders = ",".join("?" for _ in node_ids)
+    return conn.execute(
+        f"SELECT edge.src, edge.dst, edge.kind, edge.weight, edge.metadata "
+        f"FROM edges edge "
+        f"JOIN nodes src ON src.id = edge.src "
+        f"JOIN nodes dst ON dst.id = edge.dst "
+        f"WHERE edge.kind = 'dataflow' "
+        f"AND (edge.src IN ({node_placeholders}) OR edge.dst IN ({node_placeholders})) "
+        f"ORDER BY COALESCE(src.start_line, 0), COALESCE(dst.start_line, 0) "
+        f"LIMIT ?",
+        (*node_ids, *node_ids, top_k),
+    ).fetchall()
+
+
+def _dataflow_producing_path(
+    conn,
+    src_id: int,
+    dst_id: int,
+    *,
+    hops: int,
+) -> list[int]:
+    src = _node_detail(conn, src_id)
+    dst = _node_detail(conn, dst_id)
+    function = _edge_function(conn, src, dst)
+    prefix = (
+        _entry_path_to(conn, int(function["id"]), src_id, hops=hops)
+        if function is not None
+        else None
+    )
+    suffix = _control_path_between(conn, src_id, dst_id, hops=hops)
+    if prefix and suffix:
+        return [*prefix, *suffix[1:]]
+    if prefix:
+        return prefix if prefix[-1] == dst_id else [*prefix, dst_id]
+    if suffix:
+        return suffix
+    return [src_id, dst_id]
 
 
 def _function_for_flow_node(conn, node: dict[str, Any]) -> dict[str, Any] | None:
