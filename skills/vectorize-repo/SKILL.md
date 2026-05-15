@@ -8,42 +8,64 @@ description: >
   when the user wants to set up a codebase for later querying via the codebase-query
   skill.
 metadata:
-  version: "0.3.0"
+  version: "1.0.0"
 ---
 
 # Vectorize Repo
 
-Index a public GitHub repo (or local folder) into a local SQLite + sqlite-vec database so future codebase questions cost a few hundred tokens instead of tens of thousands.
+Index a public GitHub repo (or local folder) into a local SQLite database (FTS5 +
+`sqlite-vec`) so future codebase questions cost a few hundred tokens instead of
+tens of thousands.
 
-The user provides a GitHub URL or a local path. Extract that argument from their message and pass it to the indexer verbatim.
+The user provides a GitHub URL or a local path. Extract that argument from their
+message and pass it to the indexer verbatim.
 
-This skill does two things in sequence:
+## What v1.0 indexing does
 
-1. **Deterministic phase** — clone, chunk, and embed the repo into a local SQLite + sqlite-vec index. No LLM tokens spent.
-2. **One LLM pass** — read the manifest and a small sample of pivotal files, then write `ARCHITECTURE.md` (a high-level orientation map) into the repo's index directory.
+The Slice 1 indexer pipeline:
 
-After this skill runs, the `codebase-query` skill auto-fires on future questions about the repo and answers them from the index — **from any working directory on this host**.
+1. **Resolve source** — clone (URL) or copy (local) into `<repo_dir>/source/`.
+2. **Walk + filter** — `.gitignore` (root), files > 1.5 MB, binaries via NUL sniff.
+3. **Chunk** — line-aware text windows, 1500-byte budget. (Tree-sitter + cAST
+   chunking arrives in a future indexing pass.)
+4. **Embed** — `jinaai/jina-code-embeddings-1.5b` (1536-dim). GPU path uses
+   transformers FP16; CPU path uses llama-cpp-python GGUF INT4. Embeddings are
+   INT8-quantized into `sqlite-vec`.
+5. **Write** — `chunks`, `chunks_fts`, `vec_chunks`, and `meta` (schema version,
+   embedder model/dim/quant, indexed_at, repo_origin, commit_sha, counts).
+
+The full v1.0 schema (ten tables — symbol graph, flow graph, clusters, Merkle,
+etc.) is created at index time so future indexing passes add no migrations. Slice 1
+populates only the four tables above; the rest stay empty.
 
 ## Where things live
 
-All plugin data is stored under `${CLAUDE_PLUGIN_DATA}` (Claude Code sets this env var per plugin; it persists across plugin updates):
+All plugin data is stored under `${CLAUDE_PLUGIN_DATA}` (Claude Code sets this
+env var per plugin; it persists across plugin updates):
 
 ```
 ${CLAUDE_PLUGIN_DATA}/
-├── python-env/          ← the plugin's isolated Python interpreter + deps
+├── python-env/         the plugin's isolated Python interpreter + deps
 └── repos/
     └── <repo-name>/
-        ├── source/      ← the cloned repo
-        ├── index.sqlite ← FTS5 + sqlite-vec index
-        ├── manifest.json
-        └── ARCHITECTURE.md
+        ├── source/     the cloned repo (no .git/)
+        ├── index.sqlite
+        └── manifest.json
 ```
 
-The venv is named `python-env/` — not `.venv` — so it can never be mistaken for a project's own virtual environment. It is invoked by absolute path and **never activated**, so the user's shell environment, project venvs, and `PATH` are untouched.
+The venv is named `python-env/` — not `.venv` — so it can never be mistaken for
+a project's own virtual environment. It is invoked by absolute path and **never
+activated**.
+
+`ARCHITECTURE.md` lands in a later indexing pass; do not generate it from this
+skill yet.
 
 ## Step 1 — Run the indexer
 
-The launcher (`run.sh` on POSIX, `run.ps1` on Windows) handles everything: finds a usable Python 3.10–3.13, bootstraps the venv on first use, installs deps with prebuilt wheels only, downloads the BGE-small embedding model (~130 MB, one-time, to the user's HuggingFace cache), then runs the indexer.
+The launcher (`run.sh` on POSIX, `run.ps1` on Windows) handles everything: finds
+Python 3.10–3.13, bootstraps the venv, installs deps (`sqlite-vec`,
+`transformers`, `torch`, `llama-cpp-python`, etc.), downloads the embedding
+model (~750 MB GGUF, one-time, into the user's HuggingFace cache), then indexes.
 
 **On POSIX (macOS, Linux, WSL):**
 
@@ -57,7 +79,10 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" vectorize "<github_url_or_path>"
 & "${env:CLAUDE_PLUGIN_ROOT}\scripts\run.ps1" vectorize "<github_url_or_path>"
 ```
 
-First invocation takes ~2–3 minutes (venv + deps + model). Subsequent runs are seconds + index time. The script ends with a JSON summary like:
+First invocation takes 5–15 minutes (venv + deps + model). Subsequent runs
+amortize most of that — only the per-repo index work happens.
+
+The script ends with a JSON summary on the last line of stdout:
 
 ```json
 {
@@ -67,42 +92,50 @@ First invocation takes ~2–3 minutes (venv + deps + model). Subsequent runs are
   "manifest_path": ".../repos/react/manifest.json",
   "files_indexed": 1247,
   "chunks_indexed": 18402,
-  "elapsed_seconds": 84.3
+  "nodes_symbol": 0,
+  "nodes_block": 0,
+  "edges_symbol": 0,
+  "edges_flow": 0,
+  "clusters_indexed": 0,
+  "elapsed_seconds": 281.4,
+  "embedding_cache_hit_rate": 0.0,
+  "warnings": [],
+  "bench_results": {}
 }
 ```
 
-If the script errors, surface the error and stop — do not proceed to the LLM pass on a broken index.
+The zero-valued fields are placeholders for capabilities that future slices
+populate (symbol graph, flow graph, concept clusters, cross-repo embedding
+cache, benchmark suite). Their presence in the v1.0 schema means no future
+re-indexing for those features.
 
-## Step 2 — One LLM pass: write ARCHITECTURE.md
+If the script errors, surface the error and stop.
 
-After the indexer succeeds:
-
-1. **Read the manifest** at `manifest_path` from the JSON. It lists every indexed file with path, language, and chunk count.
-2. **Identify pivotal files**: package metadata (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `README.md`, top-level `*.md`), entry points (`main.*`, `index.*`, `app.*`, `__main__.py`), and the 5–10 largest source files in the most common language.
-3. **Read those files** with the Read tool — they're usually small.
-4. **Write `<source_dir>/../ARCHITECTURE.md`** with these sections:
-   - **Overview** (2–4 sentences: what the project does)
-   - **Languages & frameworks** (a short list)
-   - **Entry points** (where execution starts)
-   - **Module map** (one bullet per top-level directory)
-   - **Key abstractions** (3–7 most important concepts)
-   - **How to query this repo** (one sentence pointing at the codebase-query skill)
-
-Cap at ~1500 words. It's a map, not a manual.
-
-## Step 3 — Report to user
+## Step 2 — Report to user
 
 Tell the user in plain English:
 
-- Repo name + counts (files, chunks, elapsed) from the JSON summary
-- Where the index lives (the `db_path` directory)
-- That they can now ask codebase questions **from any working directory** and the `codebase-query` skill will answer using the index
-- That `ARCHITECTURE.md` is the starting map
+- Repo name + counts (files, chunks, elapsed) from the JSON summary.
+- Where the index lives (the `db_path` directory).
+- That they can now ask codebase questions **from any working directory** and
+  the `codebase-query` skill will answer using the index.
 
-**Do not** read further into the repo after this. Future questions go through the query skill, not by burning tokens here.
+**Do not** read further into the repo after this. Future questions go through
+the query skill, not by burning tokens here.
 
 ## Troubleshooting
 
-- **"No Python 3.10–3.13 found"** — install Python 3.12. Windows: `winget install Python.Python.3.12`. Debian/Ubuntu/WSL: `sudo apt install python3.12 python3.12-venv`. macOS: `brew install python@3.12`.
-- **Wheels fail on first install** — almost always because the user's Python is too new (3.14+) and `py-rust-stemmers` has no prebuilt wheel yet. Install Python 3.12 and re-run; the launcher picks it up automatically.
-- **Reset the plugin's state** — delete `${CLAUDE_PLUGIN_DATA}/python-env/` and re-run; deps will reinstall. Delete `${CLAUDE_PLUGIN_DATA}/repos/<name>/` to drop a single index.
+- **"No Python 3.10–3.13 found"** — install Python 3.12.
+  - Windows: `winget install Python.Python.3.12`
+  - Debian/Ubuntu/WSL: `sudo apt install python3.12 python3.12-venv`
+  - macOS: `brew install python@3.12`
+- **Wheels fail on first install** — almost always because the user's Python is
+  too new (3.14+) and `torch` or `llama-cpp-python` has no prebuilt wheel yet.
+  Install Python 3.12 and re-run.
+- **Model download fails** — the default GGUF repo/file may not exist for
+  jina-code-embeddings-1.5b. Set `CBV_GGUF_REPO` and `CBV_GGUF_FILE` env vars
+  to a known-good community quant, then re-run.
+- **Reset the plugin's state** — delete `${CLAUDE_PLUGIN_DATA}/python-env/` and
+  re-run; deps reinstall. Delete `${CLAUDE_PLUGIN_DATA}/repos/<name>/` to drop a
+  single index. The user's v0.3.0 indexes will return a "legacy schema, please
+  re-vectorize" error on query — same fix.

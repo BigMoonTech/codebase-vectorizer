@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Bootstrap launcher: ensure venv + deps, then dispatch to the requested action.
+"""Bootstrap launcher: ensure venv + deps, then dispatch to `python -m cbv`.
 
-Invoked by run.sh (POSIX) or run.ps1 (Windows). Those shims find a usable
-Python 3.10-3.13 on PATH and call this script.
+Invoked by run.sh (POSIX) or run.ps1 (Windows). Those shims find a
+usable Python 3.10-3.13 on PATH and call this script.
 
-This script then:
-  1. Creates the venv at <data_home>/python-env if missing.
-  2. Installs deps into the venv with --only-binary=:all: (forces prebuilt wheels).
-  3. Runs the requested subcommand (vectorize / query / list / info / setup)
-     using the venv python by absolute path. The venv is never activated.
+This script:
+  1. Verifies the running interpreter is Python 3.10-3.13.
+  2. Creates the venv at <data_home>/python-env if missing.
+  3. Installs deps into the venv with --only-binary=:all: where possible.
+  4. Runs `python -m cbv <verb> [args...]` inside the venv by absolute
+     path. The venv is never activated, so the user's shell, $PATH,
+     project venvs, and cwd are untouched.
 
-Stdlib-only — safe to run on Python 3.10-3.13.
+Stdlib-only — safe to run on Python 3.10-3.13 before any dep is installed.
 """
-
 from __future__ import annotations
 
 import os
@@ -25,7 +26,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from paths import (  # noqa: E402
+from cbv.paths import (  # noqa: E402
     data_home,
     list_indexed_repos,
     python_env_dir,
@@ -42,11 +43,12 @@ def check_python_version() -> None:
     if cur not in SUPPORTED_PY:
         supported = ", ".join(f"{a}.{b}" for a, b in sorted(SUPPORTED_PY))
         print(
-            f"ERROR: codebase-vectorizer needs Python 3.10-3.13 (got {cur[0]}.{cur[1]}).\n"
+            f"ERROR: codebase-vectorizer needs Python 3.10-3.13 "
+            f"(got {cur[0]}.{cur[1]}).\n"
             f"Supported: {supported}\n"
-            f"  Windows:        winget install Python.Python.3.12\n"
-            f"  Debian/Ubuntu:  sudo apt install python3.12 python3.12-venv\n"
-            f"  macOS:          brew install python@3.12",
+            f"  Windows:       winget install Python.Python.3.12\n"
+            f"  Debian/Ubuntu: sudo apt install python3.12 python3.12-venv\n"
+            f"  macOS:         brew install python@3.12",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -68,10 +70,23 @@ def ensure_venv() -> None:
 
 
 def deps_installed(py: Path) -> bool:
-    r = subprocess.run(
-        [str(py), "-c", "import fastembed, sqlite_vec, requests"],
-        capture_output=True,
+    """Quick smoke check: import the v1.0 minimums.
+
+    `llama_cpp` is optional when CUDA + torch are available (the GPU path).
+    Probe both stacks and accept either: at least one runtime embedder must
+    be importable. Without this, the bootstrap thrashes pip install on every
+    invocation when llama_cpp isn't installable (e.g. Windows without VS).
+    """
+    core_probe = (
+        "import sqlite_vec, transformers, numpy, pathspec, requests, huggingface_hub"
     )
+    if subprocess.run([str(py), "-c", core_probe], capture_output=True).returncode != 0:
+        return False
+    cpu_ok = subprocess.run([str(py), "-c", "import llama_cpp"],
+                            capture_output=True).returncode == 0
+    gpu_ok = subprocess.run([str(py), "-c", "import torch"],
+                            capture_output=True).returncode == 0
+    return cpu_ok or gpu_ok
     return r.returncode == 0
 
 
@@ -79,34 +94,28 @@ def install_deps(py: Path) -> None:
     if not REQS.exists():
         print(f"ERROR: requirements.txt not found at {REQS}", file=sys.stderr)
         sys.exit(1)
-    print(f"[bootstrap] installing deps into {python_env_dir()} (prebuilt wheels only)", flush=True)
-    cmd = [
-        str(py), "-m", "pip", "install",
-        "-r", str(REQS),
-        "--upgrade",
-        "--only-binary=:all:",
-        "--disable-pip-version-check",
-    ]
+    print(f"[bootstrap] installing deps into {python_env_dir()} "
+          f"(prebuilt wheels preferred)", flush=True)
+    cmd = [str(py), "-m", "pip", "install",
+           "-r", str(REQS),
+           "--upgrade",
+           "--only-binary=:all:",
+           "--disable-pip-version-check"]
     r = subprocess.run(cmd)
     if r.returncode == 0:
         return
-    # Rare: no prebuilt wheel for the user's platform. Allow source build.
-    print(
-        "[bootstrap] binary-only install failed; retrying with source builds allowed.",
-        flush=True,
-    )
-    cmd_src = [
-        str(py), "-m", "pip", "install",
-        "-r", str(REQS),
-        "--upgrade",
-        "--disable-pip-version-check",
-    ]
+    print("[bootstrap] binary-only install failed; retrying allowing source builds.",
+          flush=True)
+    cmd_src = [str(py), "-m", "pip", "install",
+               "-r", str(REQS),
+               "--upgrade",
+               "--disable-pip-version-check"]
     r = subprocess.run(cmd_src)
     if r.returncode != 0:
         print(
-            "[bootstrap] FAILED. Most likely cause: your Python has no prebuilt wheel "
-            "for one of the deps (typically py-rust-stemmers). Install Python 3.12 "
-            "and re-run; the launcher will pick it up.",
+            "[bootstrap] FAILED. Likely cause: your Python has no prebuilt wheel "
+            "for one of the deps (often llama-cpp-python or torch). Install Python "
+            "3.12 and re-run; the launcher picks it up automatically.",
             file=sys.stderr,
         )
         sys.exit(r.returncode)
@@ -122,37 +131,28 @@ def ensure_ready() -> Path:
 
 
 def cmd_info() -> int:
-    print(f"data_home:       {data_home()}")
-    print(f"python_env:      {python_env_dir()}")
-    print(f"python_env_bin:  {python_env_executable()}")
+    """Inlined here so `info` works before the venv exists.
+    Mirrors cbv.commands.info; kept in sync by Task 12's tests."""
+    print(f"data_home:        {data_home()}")
+    print(f"python_env:       {python_env_dir()}")
+    print(f"python_env_bin:   {python_env_executable()}")
     print(f"python_env_ready: {python_env_executable().exists()}")
-    print(f"repos_dir:       {repos_dir()}")
+    print(f"repos_dir:        {repos_dir()}")
     repos = list_indexed_repos()
-    print(f"indexed_repos:   {len(repos)}")
+    print(f"indexed_repos:    {len(repos)}")
     for r in repos:
         print(f"  - {r.name}  @  {r}")
-    return 0
-
-
-def cmd_list() -> int:
-    repos = list_indexed_repos()
-    if not repos:
-        print("No indexed repos found.")
-        print(f"  Searched: {repos_dir()}")
-        return 0
-    for r in repos:
-        print(f"{r.name}\t{r}")
     return 0
 
 
 def usage() -> int:
     print(
         "Usage: bootstrap.py {setup|vectorize|query|list|info} [args...]\n"
-        "  setup                  — create venv and install deps (idempotent)\n"
-        "  vectorize <url|path>   — index a repo into <data_home>/repos/<name>/\n"
-        "  query <name> <q>       — query an indexed repo (see query.py --help)\n"
-        "  list                   — list every indexed repo\n"
-        "  info                   — print all paths and readiness (debugging)",
+        "  setup                       create venv and install deps (idempotent)\n"
+        "  vectorize <url|path>        index a repo\n"
+        "  query <name> <question>     query an indexed repo\n"
+        "  list                        list every indexed repo\n"
+        "  info                        print all paths and readiness",
         file=sys.stderr,
     )
     return 2
@@ -165,7 +165,6 @@ def main() -> int:
     subcmd = sys.argv[1]
     rest = sys.argv[2:]
 
-    # `info` is read-only, doesn't need the venv.
     if subcmd == "info":
         return cmd_info()
 
@@ -174,20 +173,13 @@ def main() -> int:
     if subcmd == "setup":
         print("[bootstrap] OK", flush=True)
         return 0
-    if subcmd == "list":
-        return cmd_list()
 
-    target_map = {
-        "vectorize": SCRIPT_DIR / "vectorize.py",
-        "query": SCRIPT_DIR / "query.py",
-    }
-    target = target_map.get(subcmd)
-    if target is None:
+    if subcmd not in {"vectorize", "query", "list"}:
         print(f"Unknown subcommand: {subcmd}\n", file=sys.stderr)
         return usage()
 
-    # Exec the target inside the venv by absolute path — no activation.
-    r = subprocess.run([str(py), str(target), *rest])
+    r = subprocess.run([str(py), "-m", "cbv", subcmd, *rest],
+                       env={**os.environ, "PYTHONPATH": str(SCRIPT_DIR)})
     return r.returncode
 
 
