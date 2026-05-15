@@ -156,6 +156,43 @@ def test_js_family_tags_extract_exact_inherits_variables_and_references(
     assert expected_edges <= _edge_tuples(extracted)
 
 
+def test_javascript_assigned_arrow_function_emits_single_function_symbol():
+    extracted = _extract("javascript", "web/mod.js", b"const f = () => g();\n")
+
+    nodes = [node for node in extracted.nodes if node.short_name == "f"]
+    assert [(node.kind, node.name, node.parent_name) for node in nodes] == [
+        ("function", "web/mod.js::f", "web/mod.js")
+    ]
+    assert ("web/mod.js::f", "g", "calls") in _edge_tuples(extracted)
+
+
+@pytest.mark.parametrize(
+    "language, filename",
+    [
+        ("javascript", "web/view.js"),
+        ("typescript", "web/view.ts"),
+        ("tsx", "web/view.tsx"),
+    ],
+)
+def test_js_family_class_field_arrow_function_emits_single_method_symbol(
+    language,
+    filename,
+):
+    extracted = _extract(
+        language,
+        filename,
+        b"class C { handler = () => submit(); }\n",
+    )
+
+    nodes = [node for node in extracted.nodes if node.short_name == "handler"]
+    assert [(node.kind, node.name, node.parent_name) for node in nodes] == [
+        ("method", f"{filename}::C::handler", f"{filename}::C")
+    ]
+    assert (f"{filename}::C::handler", "submit", "calls") in _edge_tuples(
+        extracted
+    )
+
+
 @pytest.mark.parametrize(
     "language, filename, source, expected_nodes, expected_edges",
     [
@@ -238,6 +275,16 @@ def test_c_tags_extract_exact_variables_and_references():
         ("src/auth.c::login", "check", "calls"),
         ("src/auth.c::login", "src/auth.c::login::token", "references"),
     } <= _edge_tuples(extracted)
+
+
+def test_ruby_require_import_does_not_emit_reference_to_require():
+    extracted = _extract("ruby", "auth.rb", b"require 'json'\ndef login\nend\n")
+
+    assert ("auth.rb", "json", "imports") in _edge_tuples(extracted)
+    assert not any(
+        edge.kind == "references" and edge.dst_name == "require"
+        for edge in extracted.edges
+    )
 
 
 def test_same_file_call_references_resolve_to_full_function_name():

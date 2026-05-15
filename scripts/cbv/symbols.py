@@ -225,6 +225,9 @@ def _definition_captures(
             continue
 
         definition_node = _definition_container_node(node, parent_by_key)
+        if _should_skip_definition(language, kind, definition_node):
+            continue
+
         short_name = _definition_name(language, definition_node, source, parent_by_key)
         if not short_name:
             continue
@@ -237,6 +240,39 @@ def _definition_captures(
 
     definitions.sort(key=lambda entry: (entry.node.start_byte, -entry.node.end_byte))
     return definitions
+
+
+def _should_skip_definition(language: str, kind: str, node) -> bool:
+    if kind != "variable" or language not in _JS_FAMILY_LANGUAGES:
+        return False
+
+    if node.type not in {
+        "variable_declarator",
+        "field_definition",
+        "public_field_definition",
+    }:
+        return False
+
+    value = node.child_by_field_name("value")
+    return _is_js_function_like_value(value)
+
+
+def _is_js_function_like_value(node) -> bool:
+    if node is None:
+        return False
+    if node.type in _JS_ASSIGNED_FUNCTION_TYPES:
+        return True
+    if node.type in {
+        "parenthesized_expression",
+        "as_expression",
+        "satisfies_expression",
+        "non_null_expression",
+        "type_assertion",
+    }:
+        for child in node.children:
+            if child.is_named and _is_js_function_like_value(child):
+                return True
+    return False
 
 
 def _definition_container_node(

@@ -8,5 +8,5 @@
 (call) @reference.call
 (assignment right: (identifier) @reference.identifier)
 (call arguments: (argument_list (identifier) @reference.identifier))
-((call method: (identifier) @reference.identifier) @reference.import
- (#eq? @reference.identifier "require"))
+((call method: (identifier) @_require) @reference.import
+ (#eq? @_require "require"))
