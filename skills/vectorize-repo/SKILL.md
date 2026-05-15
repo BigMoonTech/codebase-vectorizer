@@ -22,21 +22,23 @@ message and pass it to the indexer verbatim.
 
 ## What v1.0 indexing does
 
-The Slice 1 indexer pipeline:
-
 1. **Resolve source** — clone (URL) or copy (local) into `<repo_dir>/source/`.
 2. **Walk + filter** — `.gitignore` (root), files > 1.5 MB, binaries via NUL sniff.
-3. **Chunk** — line-aware text windows, 1500-byte budget. (Tree-sitter + cAST
-   chunking arrives in a future indexing pass.)
+3. **Chunk** — tree-sitter + cAST chunks for supported languages, with
+   line-aware text windows as fallback.
 4. **Embed** — `jinaai/jina-code-embeddings-1.5b` (1536-dim). GPU path uses
    transformers FP16; CPU path uses llama-cpp-python GGUF INT4. Embeddings are
-   INT8-quantized into `sqlite-vec`.
-5. **Write** — `chunks`, `chunks_fts`, `vec_chunks`, and `meta` (schema version,
-   embedder model/dim/quant, indexed_at, repo_origin, commit_sha, counts).
+   INT8-quantized into `sqlite-vec`; the cross-repo embedding cache is used
+   unless `--no-cache` is passed.
+5. **Write index data** — chunks, FTS5 rows, vector rows, identifier trigrams,
+   symbol graph, flow graph, PageRank scores, concept clusters, Merkle hashes,
+   and metadata.
+6. **Write artifacts** — `ARCHITECTURE.md` after indexing, and
+   `bench/results.json` when benchmark data is present and `--bench` runs.
 
-The full v1.0 schema (ten tables — symbol graph, flow graph, clusters, Merkle,
-etc.) is created at index time so future indexing passes add no migrations. Slice 1
-populates only the four tables above; the rest stay empty.
+`vectorize --update` preserves a compatible existing index, reprocesses only
+added/modified/deleted files using Merkle hashes, and keeps unchanged chunks and
+embeddings. Use plain `vectorize` for a full rebuild.
 
 ## Where things live
 
@@ -45,20 +47,26 @@ env var per plugin; it persists across plugin updates):
 
 ```
 ${CLAUDE_PLUGIN_DATA}/
-├── python-env/         the plugin's isolated Python interpreter + deps
+├── python-env/              the plugin's isolated Python interpreter + deps
+├── embedding_cache.sqlite   cross-repo content-hash embedding cache
 └── repos/
     └── <repo-name>/
-        ├── source/     the cloned repo (no .git/)
+        ├── source/          the cloned repo (no .git/)
         ├── index.sqlite
-        └── manifest.json
+        ├── manifest.json
+        ├── ARCHITECTURE.md
+        └── bench/
+            └── results.json
 ```
 
 The venv is named `python-env/` — not `.venv` — so it can never be mistaken for
 a project's own virtual environment. It is invoked by absolute path and **never
 activated**.
 
-`ARCHITECTURE.md` lands in a later indexing pass; do not generate it from this
-skill yet.
+`ARCHITECTURE.md` generation uses `CBV_ARCHITECTURE_COMMAND` when configured
+and otherwise writes a deterministic fallback with a warning. Benchmark output
+is written only when benchmark query rows are available and `bench` or
+`vectorize --bench` runs.
 
 ## Step 1 — Run the indexer
 
@@ -78,6 +86,14 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" vectorize "<github_url_or_path>"
 ```powershell
 & "${env:CLAUDE_PLUGIN_ROOT}\scripts\run.ps1" vectorize "<github_url_or_path>"
 ```
+
+Useful flags:
+
+- `--update` — incrementally update an existing compatible index.
+- `--no-cache` — bypass the cross-repo embedding cache.
+- `--bench` — run benchmark queries after indexing.
+- `--max-file-mb N` — change the default 1.5 MB per-file skip threshold.
+- `--output-dir PATH` — override the repo directory location.
 
 First invocation takes 5–15 minutes (venv + deps + model). Subsequent runs
 amortize most of that — only the per-repo index work happens.
@@ -104,10 +120,12 @@ The script ends with a JSON summary on the last line of stdout:
 }
 ```
 
-The zero-valued fields are placeholders for capabilities that future slices
-populate (symbol graph, flow graph, concept clusters, cross-repo embedding
-cache, benchmark suite). Their presence in the v1.0 schema means no future
-re-indexing for those features.
+The zero values above are example values only. Real runs replace
+`nodes_symbol`, `nodes_block`, `edges_symbol`, `edges_flow`,
+`clusters_indexed`, `embedding_cache_hit_rate`, and `bench_results` with the
+actual counts, cache hit rate, and benchmark summary produced by the final
+implementation. A tiny or unsupported repo may legitimately report zero for
+some graph or cluster fields.
 
 If the script errors, surface the error and stop.
 

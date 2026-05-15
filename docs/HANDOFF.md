@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `dev`
-- Latest confirmed implementation commit: `a68e057 fix task 12 benchmark and artifact edge cases`
+- Latest confirmed implementation/doc baseline before Task 13: `52326b1 docs: mark task 12 complete`
 - `dev` is ahead of `origin/dev`; local commits since `origin/dev` include:
   - `b5886bd slice 3 t1: index identifier trigrams`
   - `4dd8597 slice 3 t1: address identifier review`
@@ -271,7 +271,9 @@ This handoff was updated after Task 12 approval:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
   - Empty indexable files that produce no chunks now get `kind='file'` nodes with `chunk_id = NULL`.
-- Next action is Task 13: update README and skill docs to match final behavior.
+- Task 13 is documentation-only: update README and skill docs to match final
+  behavior, verify command coverage, and leave final plan checkbox updates to
+  the controller after review.
 
 ## Verified Baseline
 
@@ -408,9 +410,11 @@ The master document is:
 
 The spec is authoritative over all plans. The final completion plan has been revised so reduced local MVP behavior is allowed only as an intermediate bootstrap step or as an explicit spec-defined fallback. It is not the final definition of done.
 
-Spec-required surfaces still to implement:
+Spec-required surfaces at Task 13:
 
-1. README and skill docs aligned to final behavior.
+1. README and skill docs aligned to final behavior by this documentation pass.
+2. Controller review and plan checkbox update still pending.
+3. Task 14 final verification gate remains before v1.0 code-complete.
 
 ## Completion Tracking Rule
 
@@ -420,6 +424,9 @@ The active completion plan now repeats this directive across the plan:
 
 Operational meaning:
 
+- Task 13 exception: the current user instruction supersedes the general rule;
+  do not edit the plan file in this pass. The controller will mark Task 13
+  after review.
 - After a task's implementation, verification command, and commit step succeed, edit `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
 - Change the relevant checklist items from `- [ ]` to `- [x]`.
 - Do not rely on terminal output, chat history, or commit messages as the only completion record.
@@ -436,11 +443,12 @@ User requested:
 
 Recommended next action:
 
-1. Begin Task 13 for README and skill-doc updates.
-2. After Task 13 implementation, verification, and review pass, mark Task 13 complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`.
+1. Finish Task 13 docs verification and review.
+2. Let the controller mark Task 13 complete in
+   `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md`
+   after review.
 3. Run Task 14's final full verification gate before calling v1.0 code-complete.
-4. After each task is safely done, edit the plan to mark completed checklist items.
-5. Run each task's verification command before committing.
+4. Run each task's verification command before committing.
 
 ## Do Not Drift
 

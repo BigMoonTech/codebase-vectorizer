@@ -14,10 +14,10 @@ metadata:
 # Codebase Query
 
 Answer codebase questions token-efficiently by querying the local v1.0 index
-(SQLite + FTS5 + `sqlite-vec`), then reading only the specific file ranges the
-query returns. **Never scan the indexed repo with Glob/Grep/Read on full files
-unless the query tool comes back empty.** That defeats the entire purpose of
-this plugin.
+(SQLite + FTS5 + `sqlite-vec` + symbol/flow graph metadata), then reading only
+the specific file ranges the query returns. **Never scan the indexed repo with
+Glob/Grep/Read on full files unless the query tool comes back empty.** That
+defeats the entire purpose of this plugin.
 
 Indexes live in `${CLAUDE_PLUGIN_DATA}/repos/` — the same location regardless
 of where the user runs `claude`. Vectorize once, query from anywhere.
@@ -59,14 +59,20 @@ Pass the user's question verbatim — do not paraphrase.
 **On POSIX:**
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" query <repo_name> "<exact user question>" --top-k 6
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" query <repo_name> "<exact user question>" --top-k 6 --lane auto
 ```
 
 **On Windows (PowerShell):**
 
 ```powershell
-& "${env:CLAUDE_PLUGIN_ROOT}\scripts\run.ps1" query <repo_name> "<exact user question>" --top-k 6
+& "${env:CLAUDE_PLUGIN_ROOT}\scripts\run.ps1" query <repo_name> "<exact user question>" --top-k 6 --lane auto
 ```
+
+`--lane auto` routes identifier-style lookups to the fast lane and
+natural-language questions to the full lane. Use `--lane fast` when the user is
+clearly asking for an exact symbol/identifier lookup. Use `--lane full` when
+they need semantic retrieval, graph expansion, Personalized PageRank, rerank,
+or query refinement even for a terse query.
 
 The script prints v1.0-shape JSON to stdout (last line):
 
@@ -91,14 +97,28 @@ The script prints v1.0-shape JSON to stdout (last line):
     }
   ],
   "refined_queries": [],
-  "expansion_size": 0
+  "expansion_size": 0,
+  "reranker_model": "..."
 }
 ```
 
-`refined_queries` is always present but empty until a later indexing pass adds
-confidence-based hints; `expansion_size` is zero until graph expansion lands.
-`pipeline_used` is always `"full"` in v1.0 Slice 1 — the fast lane / router
-arrives later.
+The routing fields always follow this shape:
+
+```json
+{
+  "pipeline_used": "fast|full",
+  "refined_queries": [],
+  "expansion_size": 0,
+  "reranker_model": "..."
+}
+```
+
+`pipeline_used` reports the actual lane after `auto` routing, so it is either
+`"fast"` or `"full"`. Fast-lane responses use symbol exact matches, identifier
+trigrams, and BM25, with `expansion_size: 0`, no reranker model, and no refined
+queries. Full-lane responses add dense retrieval, graph expansion, Personalized
+PageRank, cross-encoder reranking, `reranker_model`, and low-confidence
+`refined_queries` hints when applicable.
 
 ### 3. Read only the returned ranges
 
@@ -122,8 +142,9 @@ Cite every claim with `file:line` form, e.g.
 
 - **Do not** `Glob`, `Grep`, or `Read` whole files in the indexed repo as a
   first move. Query first.
-- **Do not** re-index the repo. If the user wants a fresh index, run
-  `vectorize-repo` again.
+- **Do not** re-index the repo for a normal question. If the user wants a fresh
+  or incremental index, run `vectorize-repo` again with plain `vectorize` or
+  `vectorize --update`.
 - **Do not** answer from training-data memory.
 - If the query script errors with "No index found", run `list` (Step 1) and
   tell the user what's available.
