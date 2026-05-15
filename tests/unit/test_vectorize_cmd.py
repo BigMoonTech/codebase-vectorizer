@@ -13,8 +13,9 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import pytest
+import numpy as np
 
-from cbv import paths  # noqa: E402
+from cbv import cache, chunker, paths  # noqa: E402
 from cbv.commands import vectorize as vec_cmd  # noqa: E402
 
 
@@ -248,8 +249,15 @@ def test_vectorize_populates_embedding_cache_on_first_run(tmp_home, source_repo,
         ).fetchone()[0]
     finally:
         conn.close()
+    index_conn = sqlite3.connect(paths.repo_dir("upstream") / "index.sqlite")
+    try:
+        distinct_cached_chunks = index_conn.execute(
+            "SELECT COUNT(DISTINCT content_hash) FROM chunks"
+        ).fetchone()[0]
+    finally:
+        index_conn.close()
 
-    assert cache_rows == blob["chunks_indexed"]
+    assert cache_rows == distinct_cached_chunks
     assert blob["embedding_cache_hit_rate"] == 0.0
     assert manifest["embedding_cache_hit_rate"] == 0.0
 
@@ -271,3 +279,58 @@ def test_vectorize_reuses_embedding_cache_on_second_identical_run(
 
     assert blob["embedding_cache_hit_rate"] == 1.0
     assert manifest["embedding_cache_hit_rate"] == 1.0
+
+
+def test_vectorize_no_cache_does_not_create_embedding_cache(tmp_home, source_repo, capsys):
+    ns = argparse.Namespace(
+        source=str(source_repo),
+        output_dir=None,
+        max_file_mb=1.5,
+        no_cache=True,
+    )
+
+    vec_cmd.run(ns)
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+    manifest = json.loads((paths.repo_dir("upstream") / "manifest.json").read_text())
+
+    assert not paths.embedding_cache_path().exists()
+    assert blob["embedding_cache_hit_rate"] == 0.0
+    assert manifest["embedding_cache_hit_rate"] == 0.0
+
+
+def test_vectorize_replaces_wrong_length_cached_embedding(
+    tmp_home,
+    source_repo,
+    capsys,
+):
+    first_chunk = next(iter(chunker.chunk_file(source_repo / "main.py")))
+    cache_conn = cache.open_cache(paths.embedding_cache_path())
+    try:
+        cache.put(
+            cache_conn,
+            first_chunk.content_hash,
+            "stub://sha256",
+            np.array([1, 2, 3], dtype=np.int8),
+        )
+        cache_conn.commit()
+    finally:
+        cache_conn.close()
+
+    ns = argparse.Namespace(source=str(source_repo), output_dir=None, max_file_mb=1.5)
+    assert vec_cmd.run(ns) == 0
+    blob = json.loads(
+        [l for l in capsys.readouterr().out.strip().splitlines() if l.strip()][-1]
+    )
+
+    cache_conn = cache.open_cache(paths.embedding_cache_path())
+    try:
+        cached = cache.get(cache_conn, first_chunk.content_hash, "stub://sha256")
+    finally:
+        cache_conn.close()
+
+    assert blob["embedding_cache_hit_rate"] == 0.0
+    assert cached is not None
+    assert cached.dtype == np.int8
+    assert cached.shape == (1536,)

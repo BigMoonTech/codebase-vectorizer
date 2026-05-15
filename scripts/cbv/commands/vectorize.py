@@ -66,138 +66,139 @@ def run(ns: argparse.Namespace) -> int:
     if db_path.exists():
         db_path.unlink()  # fresh index every run; incremental lands in Slice 12
     conn = db.open_db(db_path)
-    db.init_schema(conn)
-
-    # Step 3+4: walk and chunk.
-    chunks_buf: list[chunker.Chunk] = []
-    source_files: list[tuple[str, str]] = []
-    file_count = 0
-    warnings: list[str] = []
-    for entry in walker.walk(src_dir, max_file_mb=ns.max_file_mb):
-        file_count += 1
-        rel_file_path = entry.relpath.as_posix()
-        source_files.append((rel_file_path, chunker.detect_language(entry.abspath)))
-        try:
-            file_chunks = list(chunker.chunk_file(entry.abspath))
-        except Exception as e:  # broad: per-file failure must not kill the run
-            warnings.append(f"chunk failed for {entry.relpath}: {e}")
-            continue
-        # rewrite file_path to be repo-relative for storage
-        for c in file_chunks:
-            chunks_buf.append(chunker.Chunk(
-                file_path=rel_file_path,
-                language=c.language, kind=c.kind, name=c.name,
-                ast_path=c.ast_path, start_line=c.start_line,
-                end_line=c.end_line, start_byte=c.start_byte,
+    try:
+        db.init_schema(conn)
+        # Step 3+4: walk and chunk.
+        chunks_buf: list[chunker.Chunk] = []
+        source_files: list[tuple[str, str]] = []
+        file_count = 0
+        warnings: list[str] = []
+        for entry in walker.walk(src_dir, max_file_mb=ns.max_file_mb):
+            file_count += 1
+            rel_file_path = entry.relpath.as_posix()
+            source_files.append((rel_file_path, chunker.detect_language(entry.abspath)))
+            try:
+                file_chunks = list(chunker.chunk_file(entry.abspath))
+            except Exception as e:  # broad: per-file failure must not kill the run
+                warnings.append(f"chunk failed for {entry.relpath}: {e}")
+                continue
+            # rewrite file_path to be repo-relative for storage
+            for c in file_chunks:
+                chunks_buf.append(chunker.Chunk(
+                    file_path=rel_file_path,
+                    language=c.language, kind=c.kind, name=c.name,
+                    ast_path=c.ast_path, start_line=c.start_line,
+                    end_line=c.end_line, start_byte=c.start_byte,
                 end_byte=c.end_byte, content=c.content,
                 content_hash=c.content_hash, token_count=c.token_count,
             ))
 
-    print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
+        print(f"[vectorize] {file_count} files -> {len(chunks_buf)} chunks", flush=True)
 
-    # Step 5: embed cache misses (skip the model load if there's nothing to embed).
-    embedding_cache_hit_rate = 0.0
-    quantized_embeddings = []
-    if not chunks_buf:
-        emb = embedder.StubEmbedder()
-    else:
-        emb = embedder.make_embedder()
-        print(f"[vectorize] embedder: {emb.model_id}", flush=True)
-        cache_conn = None
-        if not getattr(ns, "no_cache", False):
-            cache_conn = cache.open_cache(paths.embedding_cache_path())
-        try:
-            hits = 0
-            quantized_embeddings = [None] * len(chunks_buf)
-            miss_positions: list[int] = []
-            miss_texts: list[str] = []
-            for i, c in enumerate(chunks_buf):
-                cached = (
-                    cache.get(cache_conn, c.content_hash, emb.model_id)
-                    if cache_conn is not None
-                    else None
-                )
-                if cached is None:
-                    miss_positions.append(i)
-                    miss_texts.append(c.content)
-                else:
-                    hits += 1
-                    quantized_embeddings[i] = cached
+        # Step 5: embed cache misses (skip the model load if there's nothing to embed).
+        embedding_cache_hit_rate = 0.0
+        quantized_embeddings = []
+        if not chunks_buf:
+            emb = embedder.StubEmbedder()
+        else:
+            emb = embedder.make_embedder()
+            print(f"[vectorize] embedder: {emb.model_id}", flush=True)
+            cache_conn = None
+            if not getattr(ns, "no_cache", False):
+                cache_conn = cache.open_cache(paths.embedding_cache_path())
+            try:
+                hits = 0
+                quantized_embeddings = [None] * len(chunks_buf)
+                miss_positions: list[int] = []
+                miss_texts: list[str] = []
+                for i, c in enumerate(chunks_buf):
+                    cached = (
+                        cache.get(cache_conn, c.content_hash, emb.model_id)
+                        if cache_conn is not None
+                        else None
+                    )
+                    if cached is None or cached.shape != (emb.dim,):
+                        miss_positions.append(i)
+                        miss_texts.append(c.content)
+                    else:
+                        hits += 1
+                        quantized_embeddings[i] = cached
 
-            miss_embeddings = _embed_in_batches(emb, miss_texts, BATCH_SIZE)
-            if cache_conn is None:
-                for pos, emb_row in zip(miss_positions, miss_embeddings):
-                    quantized_embeddings[pos] = quantize.quantize_int8(
-                        emb_row.reshape(1, -1)
-                    )[0]
-            else:
-                with cache_conn:
+                miss_embeddings = _embed_in_batches(emb, miss_texts, BATCH_SIZE)
+                if cache_conn is None:
                     for pos, emb_row in zip(miss_positions, miss_embeddings):
-                        q = quantize.quantize_int8(emb_row.reshape(1, -1))[0]
-                        quantized_embeddings[pos] = q
-                        cache.put(
-                            cache_conn,
-                            chunks_buf[pos].content_hash,
-                            emb.model_id,
-                            q,
-                        )
-            embedding_cache_hit_rate = hits / len(chunks_buf)
-        finally:
-            if cache_conn is not None:
-                cache_conn.close()
+                        quantized_embeddings[pos] = quantize.quantize_int8(
+                            emb_row.reshape(1, -1)
+                        )[0]
+                else:
+                    with cache_conn:
+                        for pos, emb_row in zip(miss_positions, miss_embeddings):
+                            q = quantize.quantize_int8(emb_row.reshape(1, -1))[0]
+                            quantized_embeddings[pos] = q
+                            cache.put(
+                                cache_conn,
+                                chunks_buf[pos].content_hash,
+                                emb.model_id,
+                                q,
+                            )
+                embedding_cache_hit_rate = hits / len(chunks_buf)
+            finally:
+                if cache_conn is not None:
+                    cache_conn.close()
 
-    # Step 6: write chunks + embeddings.
-    # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().
-    with conn:
-        for c in chunks_buf:
-            conn.execute(
-                "INSERT INTO chunks (file_path, language, kind, name, ast_path, "
-                "start_line, end_line, start_byte, end_byte, content, "
-                "content_hash, token_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (c.file_path, c.language, c.kind, c.name, c.ast_path,
-                 c.start_line, c.end_line, c.start_byte, c.end_byte,
-                 c.content, c.content_hash, c.token_count),
+        # Step 6: write chunks + embeddings.
+        # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().
+        with conn:
+            for c in chunks_buf:
+                conn.execute(
+                    "INSERT INTO chunks (file_path, language, kind, name, ast_path, "
+                    "start_line, end_line, start_byte, end_byte, content, "
+                    "content_hash, token_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (c.file_path, c.language, c.kind, c.name, c.ast_path,
+                     c.start_line, c.end_line, c.start_byte, c.end_byte,
+                     c.content, c.content_hash, c.token_count),
+                )
+            chunk_ids = [row[0] for row in conn.execute("SELECT id FROM chunks ORDER BY id").fetchall()]
+            assert len(chunk_ids) == len(chunks_buf)
+            for chunk_id, c in zip(chunk_ids, chunks_buf):
+                conn.executemany(
+                    "INSERT INTO symbol_trigrams (trigram, chunk_id, symbol, occurrences) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(trigram, chunk_id, symbol) DO UPDATE SET "
+                    "occurrences = occurrences + excluded.occurrences",
+                    identifiers.symbol_trigram_rows(chunk_id, c.content),
             )
-        chunk_ids = [row[0] for row in conn.execute("SELECT id FROM chunks ORDER BY id").fetchall()]
-        assert len(chunk_ids) == len(chunks_buf)
-        for chunk_id, c in zip(chunk_ids, chunks_buf):
-            conn.executemany(
-                "INSERT INTO symbol_trigrams (trigram, chunk_id, symbol, occurrences) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(trigram, chunk_id, symbol) DO UPDATE SET "
-                "occurrences = occurrences + excluded.occurrences",
-                identifiers.symbol_trigram_rows(chunk_id, c.content),
-            )
-        for chunk_id, q in zip(chunk_ids, quantized_embeddings):
-            db.insert_embedding(conn, chunk_id, q)
+            for chunk_id, q in zip(chunk_ids, quantized_embeddings):
+                db.insert_embedding(conn, chunk_id, q)
 
-    nodes_symbol, edges_symbol = _write_symbol_graph(
-        conn,
-        src_dir,
-        source_files,
-        chunks_buf,
-        chunk_ids,
-        warnings,
-    )
-    graph.compute_pagerank(conn, warnings=warnings)
+        nodes_symbol, edges_symbol = _write_symbol_graph(
+            conn,
+            src_dir,
+            source_files,
+            chunks_buf,
+            chunk_ids,
+            warnings,
+        )
+        graph.compute_pagerank(conn, warnings=warnings)
 
-    # Step 7: meta + manifest.
-    _write_meta(
-        conn,
-        repo_name,
-        spec,
-        commit_sha,
-        emb,
-        len(chunks_buf),
-        nodes_symbol,
-        edges_symbol,
-    )
-    manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
-                                file_count, len(chunks_buf), warnings,
-                                embedding_cache_hit_rate)
-    (repo_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        # Step 7: meta + manifest.
+        _write_meta(
+            conn,
+            repo_name,
+            spec,
+            commit_sha,
+            emb,
+            len(chunks_buf),
+            nodes_symbol,
+            edges_symbol,
+        )
+        manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
+                                    file_count, len(chunks_buf), warnings,
+                                    embedding_cache_hit_rate)
+        (repo_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
-    conn.close()
+    finally:
+        conn.close()
 
     # Step 8: emit v1.0 summary JSON on stdout (last line).
     elapsed = time.time() - t_start

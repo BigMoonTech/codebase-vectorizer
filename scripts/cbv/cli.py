@@ -25,6 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="override repo directory location")
     pv.add_argument("--max-file-mb", type=float, default=1.5,
                     help="skip files larger than this many MB (default 1.5)")
+    pv.add_argument("--no-cache", action="store_true",
+                    help="disable the cross-repo embedding cache")
 
     pq = sub.add_parser("query", help="Query an indexed repo")
     pq.add_argument("repo", help="indexed repo name")

@@ -42,6 +42,15 @@ def test_cli_parses_vectorize_args():
     ns = parser.parse_args(["vectorize", "https://github.com/x/y"])
     assert ns.verb == "vectorize"
     assert ns.source == "https://github.com/x/y"
+    assert ns.no_cache is False
+
+
+def test_cli_parses_vectorize_no_cache_flag():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["vectorize", "https://github.com/x/y", "--no-cache"])
+    assert ns.verb == "vectorize"
+    assert ns.source == "https://github.com/x/y"
+    assert ns.no_cache is True
 
 
 def test_cli_parses_query_args():
