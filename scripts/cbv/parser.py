@@ -1,12 +1,12 @@
-"""Tree-sitter integration for codebase-vectorizer.
+"""Language registry for codebase-vectorizer tree-sitter support.
 
-This module defines the set of languages cbv parses with tree-sitter
-("Tier-A" languages per the spec) and exposes a `parse(bytes, Language)`
-function that returns a `Tree` (or None on failure).
+This module defines the set of languages cbv will parse with
+tree-sitter ("Tier-A" languages per the spec), plus helpers for looking
+up languages by canonical name or file extension.
 
-Top-level imports are stdlib-only. tree-sitter and
-tree-sitter-language-pack are imported lazily inside `parse()` so the
-module loads cheaply for unit tests that only exercise the registry.
+Top-level imports are stdlib-only so the registry can be used without
+tree-sitter installed. A future slice will add parsing support with lazy
+tree-sitter imports.
 
 Slice 2 covers Tier-A languages. Tier-B / Tier-C support (more grammars
 without CFG/DFG) is a future-slice concern; nothing prevents us from
