@@ -631,7 +631,7 @@ git commit -m "slice 3 t2a: complete tags-based tier-a symbol extraction"
 - Modify: `scripts/cbv/commands/query.py`
 - Create: `tests/integration/test_query_lanes.py`
 
-- [ ] **Step 1: Write router tests**
+- [x] **Step 1: Write router tests**
 
 Create `tests/unit/test_query_router.py`:
 
@@ -653,7 +653,7 @@ def test_forced_lane_wins():
     assert query_router.route("how does auth work", forced="fast") == "fast"
 ```
 
-- [ ] **Step 2: Add `--lane` CLI argument**
+- [x] **Step 2: Add `--lane` CLI argument**
 
 In `cli.py`, add:
 
@@ -662,7 +662,7 @@ pq.add_argument("--lane", choices=("auto", "fast", "full"), default="auto",
                 help="query lane: auto, fast, or full (default auto)")
 ```
 
-- [ ] **Step 3: Implement router**
+- [x] **Step 3: Implement router**
 
 Create `scripts/cbv/query_router.py`:
 
@@ -691,7 +691,7 @@ def route(query: str, forced: str = "auto") -> str:
     return "full"
 ```
 
-- [ ] **Step 4: Refactor query into lane helpers**
+- [x] **Step 4: Refactor query into lane helpers**
 
 In `query.py`, keep `_bm25`, `_dense`, and `_rrf`. Add:
 
@@ -762,7 +762,7 @@ Set:
 "expansion_size": len(expansion) if lane == "full" else 0,
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
