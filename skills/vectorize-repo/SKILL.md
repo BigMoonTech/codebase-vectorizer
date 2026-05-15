@@ -34,7 +34,7 @@ message and pass it to the indexer verbatim.
    symbol graph, flow graph, PageRank scores, concept clusters, Merkle hashes,
    and metadata.
 6. **Write artifacts** — `ARCHITECTURE.md` after indexing, and
-   `bench/results.json` when benchmark data is present and `--bench` runs.
+   `bench/results.json` when `--bench` runs.
 
 `vectorize --update` preserves a compatible existing index, reprocesses only
 added/modified/deleted files using Merkle hashes, and keeps unchanged chunks and
@@ -64,9 +64,10 @@ a project's own virtual environment. It is invoked by absolute path and **never
 activated**.
 
 `ARCHITECTURE.md` generation uses `CBV_ARCHITECTURE_COMMAND` when configured
-and otherwise writes a deterministic fallback with a warning. Benchmark output
-is written only when benchmark query rows are available and `bench` or
-`vectorize --bench` runs.
+and otherwise writes a deterministic fallback with a warning. `bench <repo>`
+writes `bench/results.json`; if no benchmark query rows are found, it writes
+zeroed metrics. `vectorize --bench` runs that same benchmark step after
+indexing and may likewise write zeroed results when no rows are present.
 
 ## Step 1 — Run the indexer
 
@@ -91,7 +92,7 @@ Useful flags:
 
 - `--update` — incrementally update an existing compatible index.
 - `--no-cache` — bypass the cross-repo embedding cache.
-- `--bench` — run benchmark queries after indexing.
+- `--bench` — run the benchmark step after indexing.
 - `--max-file-mb N` — change the default 1.5 MB per-file skip threshold.
 - `--output-dir PATH` — override the repo directory location.
 

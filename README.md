@@ -59,7 +59,7 @@ ${CLAUDE_PLUGIN_DATA}/
         ├── manifest.json
         ├── ARCHITECTURE.md  ← orientation map written after indexing
         └── bench/
-            └── results.json ← benchmark output when bench data is present
+            └── results.json ← benchmark output after bench runs
 ```
 
 A few design choices worth knowing:
@@ -155,9 +155,11 @@ When run standalone (outside a Claude Code session), `${CLAUDE_PLUGIN_DATA}` isn
 - `flow <repo> <symbol>` is a convenience alias for
   `relate <repo> paths-through <symbol>`.
 - `bench <repo>` reads CoIR/RepoEval-style JSONL rows from `bench/` locations,
-  runs full-lane queries, writes `<repo_dir>/bench/results.json`, and reports
-  MRR@10, NDCG@10, Recall@5, and Recall@10. `vectorize --bench` runs the same
-  benchmark step after indexing when benchmark rows are available.
+  runs full-lane queries when rows exist, writes `<repo_dir>/bench/results.json`,
+  and reports MRR@10, NDCG@10, Recall@5, and Recall@10. If no rows are found,
+  it still writes `bench/results.json` with zeroed metrics. `vectorize --bench`
+  runs the same benchmark step after indexing and may likewise write zeroed
+  results when no rows are present.
 
 ## Limits & known trade-offs
 

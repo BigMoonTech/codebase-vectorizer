@@ -359,44 +359,31 @@ Latest verification in the current session:
 
 ## What Exists Today
 
-Slice 1 delivered the first working v1.0 vertical:
+v1.0 is code-complete through Task 13 docs, pending controller review and the
+Task 14 final verification gate. The current implementation includes:
 
-- Replaced the old v0.3.0 scripts with the `scripts/cbv/` package.
-- Added v1.0 SQLite schema creation for all ten tables.
-- Populates `chunks`, `chunks_fts`, `vec_chunks`, and `meta`.
-- Added source population, file walking, line-aware fallback chunking, INT8 quantization, embedder factory, CLI commands, and query pipeline.
-- Query pipeline currently uses BM25 + dense KNN + Reciprocal Rank Fusion.
-- Updated `vectorize-repo` and `codebase-query` skills to v1.0 JSON shape.
-
-Slice 2 added AST-aware chunking:
-
-- Added tree-sitter integration through `scripts/cbv/parser.py`.
-- Added cAST chunking through `scripts/cbv/cast_chunker.py`.
-- Refactored `scripts/cbv/chunker.py` into AST-first orchestration with text-window fallback.
-- Preserved stable `Chunk` shape and existing vectorize/query surfaces.
-- Added broad unit coverage for AST chunk kind/name/path behavior and integration coverage for JavaScript AST chunks.
-
-Current Slice 3/Milestone 1 work adds:
-
-- Identifier trigram indexing in `symbol_trigrams`.
-- Tier-A query-backed symbol extraction for definitions, variables, imports, calls, inherits, and references.
-- Symbol graph persistence in `nodes` and `edges`, including chunkless file nodes.
-- Query router and `--lane auto|fast|full`.
-- Fast lane using symbol exact, identifier trigrams, and BM25 without dense embedding.
-- Full lane using BM25, dense, symbol exact, graph expansion, and RRF.
+- `scripts/cbv/` package replacing the old v0.3.0 scripts.
+- v1.0 SQLite schema and populated chunks, FTS5 rows, sqlite-vec rows, metadata,
+  identifier trigrams, symbol graph, flow graph, Merkle rows, concept clusters,
+  and artifact metadata.
+- Source population, file walking, tree-sitter + cAST chunking with line-aware
+  fallback, INT8 quantization, embedder factory, and CLI commands.
+- Query router and `query --lane auto|fast|full`.
+- Fast lane using symbol exact, identifier trigrams, and BM25 without dense
+  embedding.
+- Full lane using BM25, dense, symbol exact, graph expansion, Personalized
+  PageRank, Reciprocal Rank Fusion, cross-encoder reranking, and low-confidence
+  `refined_queries` hints.
 - Global PageRank computation over symbol nodes during vectorize.
 - `stats` command with counts, cluster label details, and top PageRank nodes.
-- Query-time Personalized PageRank in the full lane, seeded from the post-expansion bounded set.
 - `relate` command, plus `graph` and `flow` aliases, for graph/relationship queries over indexed repos.
 - `codebase-relate` skill documenting caller/callee, neighborhood, path, concept, PageRank, and flow query usage.
-- Cross-encoder reranker adapter with deterministic stub path.
-- Full-lane reranking, query-time `reranker_model`, and low-confidence `refined_queries` hints.
 - Cross-repo content-hash embedding cache with `--no-cache`, hit-rate reporting, wrong-length fallback, and stale-schema migration.
 - Merkle incremental indexing with `vectorize --update`, safe Merkle backfill, retryable chunk failures, and transactional update writes.
 - Spec-complete Task 10A intra-procedural flow indexing with block nodes, `controls`/`guards`/`dataflow` edges, vectorize flow counts, Tier-A best-effort tree-sitter coverage, and semantic flow relate JSON.
 - Spec-aligned concept clusters using UMAP + HDBSCAN, stored centroids, soft chunk memberships, configurable LLM labels with warning-backed deterministic fallback, safe incremental cluster refresh, and `relate concept-cluster`.
 - `ARCHITECTURE.md` generation after vectorize with configurable local LLM command, deterministic warning-backed fallback, and non-critical artifact failure handling.
-- `bench <repo>` and optional `vectorize --bench`, with CoIR/RepoEval-style JSONL inputs, file-level MRR@10/NDCG@10/Recall@5/Recall@10 scoring, `bench/results.json`, and summary `bench_results`.
+- `bench <repo>` and optional `vectorize --bench`, with CoIR/RepoEval-style JSONL inputs, file-level MRR@10/NDCG@10/Recall@5/Recall@10 scoring, `bench/results.json`, zeroed results when no rows exist, and summary `bench_results`.
 
 Important implementation detail:
 
