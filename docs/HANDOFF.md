@@ -24,7 +24,15 @@ This handoff was updated during Task 2 review. At the moment of this update:
 
 - Task 1 is implemented, reviewed, committed, and marked complete in the final completion plan.
 - Task 2 is implemented, reviewed, committed, and marked complete in the final completion plan.
-- Task 2A is in progress with a fresh subagent.
+- Task 2A is implemented at `c1cd773`, with a first review-fix commit at `f9a3a41`, but is not yet approved.
+- Task 2A local verification after the first fix passed (`28 passed`), and spec re-review passed.
+- Task 2A code-quality review then found spec-completeness blockers now assigned back to the Task 2A worker:
+  - `scripts/cbv/tag_queries.py` is shadowed by the `scripts/cbv/tag_queries/` package under normal `import cbv.tag_queries`; the sibling loader file must be made meaningfully used.
+  - Cross-file graph edge resolution must not link incompatible unique short names, e.g. a `calls` edge resolving to a unique `class` node.
+  - Tier-A query files must add real `reference.identifier`, `reference.inherits`, and `definition.variable` coverage instead of mostly definitions/imports/calls.
+  - Rust `impl_item` handling must not create duplicate full-name class nodes.
+  - Tier-A query failures must not silently fall back without vectorize warnings.
+  - Cross-file resolution should prefer same directory/package prefix before dropping ambiguous compatible candidates.
 - Task 2 review fixes landed in `758be1e` and `2104d5b`:
   - Duplicate short-name edge resolution drops ambiguous edges unless full-name resolution succeeds.
   - Parser-failure/file-node behavior preserves file nodes and emits `symbol extraction failed for <file>: <error>` warnings while indexing continues.
@@ -120,11 +128,12 @@ User requested:
 Recommended next action:
 
 1. Finish Task 2A implementation and review loop.
-2. If Task 2A reviews pass, mark Task 2A complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md` and commit the checklist update.
-3. Continue with Task 3 using `superpowers:subagent-driven-development` with fresh subagents and review after each task.
-4. After each task is safely done, edit the plan to mark completed checklist items.
-5. Run each task's verification command before committing.
-6. Run the final full verification gate before calling v1.0 code-complete.
+2. Specifically verify broad query edge coverage, Rust impl handling, query-failure warnings, tag-query loader/package coexistence, and graph compatible-kind/same-package edge resolution fixes.
+3. If Task 2A reviews pass, mark Task 2A complete in `docs/plans/2026-05-15-codebase-vectorizer-v1.0-final-vertical-completion.md` and commit the checklist update.
+4. Continue with Task 3 using `superpowers:subagent-driven-development` with fresh subagents and review after each task.
+5. After each task is safely done, edit the plan to mark completed checklist items.
+6. Run each task's verification command before committing.
+7. Run the final full verification gate before calling v1.0 code-complete.
 
 ## Do Not Drift
 
