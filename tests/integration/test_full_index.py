@@ -35,14 +35,27 @@ def indexed(monkeypatch, tmp_path):
 
 
 def test_index_files_count_matches_fixture(indexed):
-    """The fixture has 10 indexable files (after gitignore)."""
+    """The fixture has 11 indexable files (after gitignore)."""
     from cbv import db, paths
     conn = db.open_db(paths.repo_dir(indexed) / "index.sqlite")
     n_files = conn.execute(
         "SELECT COUNT(DISTINCT file_path) FROM chunks"
     ).fetchone()[0]
-    # 5 pkg/*.py + tests/test_auth.py + main.py + README.md + pyproject.toml + .gitignore
-    assert n_files == 10
+    # 5 pkg/*.py + tests/test_auth.py + main.py + util.js + README.md + pyproject.toml + .gitignore
+    assert n_files == 11
+
+
+def test_javascript_file_produces_ast_chunks(indexed):
+    from cbv import db, paths
+
+    conn = db.open_db(paths.repo_dir(indexed) / "index.sqlite")
+    rows = conn.execute(
+        "SELECT language, kind FROM chunks WHERE file_path = 'util.js'"
+    ).fetchall()
+
+    assert rows
+    assert {language for language, _kind in rows} == {"javascript"}
+    assert {kind for _language, kind in rows} & {"function", "class", "method"}
 
 
 def test_query_for_authenticate_finds_auth_py(indexed, capsys):
