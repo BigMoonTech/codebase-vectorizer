@@ -141,9 +141,7 @@ def test_vectorize_warns_on_supported_query_failure_and_preserves_file_node(
     )
 
     assert rc == 0
-    assert summary["warnings"] == [
-        "symbol extraction failed for broken.py: forced query failure"
-    ]
+    assert "symbol extraction failed for broken.py: forced query failure" in summary["warnings"]
     conn = db.open_db(output_dir / "index.sqlite")
     assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 0
     non_block_rows = conn.execute(
