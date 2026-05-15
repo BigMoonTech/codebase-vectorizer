@@ -50,12 +50,14 @@ def test_javascript_file_produces_ast_chunks(indexed):
 
     conn = db.open_db(paths.repo_dir(indexed) / "index.sqlite")
     rows = conn.execute(
-        "SELECT language, kind FROM chunks WHERE file_path = 'util.js'"
+        "SELECT language, kind, name, ast_path "
+        "FROM chunks WHERE file_path = 'util.js' ORDER BY start_byte"
     ).fetchall()
 
-    assert rows
-    assert {language for language, _kind in rows} == {"javascript"}
-    assert {kind for _language, kind in rows} & {"function", "class", "method"}
+    assert rows == [
+        ("javascript", "function", "camelCase", "module/function[camelCase]"),
+        ("javascript", "function", "snakeCase", "module/function[snakeCase]"),
+    ]
 
 
 def test_query_for_authenticate_finds_auth_py(indexed, capsys):
