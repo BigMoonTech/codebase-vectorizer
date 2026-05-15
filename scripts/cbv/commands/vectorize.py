@@ -41,6 +41,7 @@ from cbv import (
 )
 
 BATCH_SIZE = 32
+CLUSTER_INDEX_VERSION = "umap-hdbscan-v1"
 FLOW_EDGE_WEIGHTS = {
     "controls": 0.5,
     "dataflow": 0.7,
@@ -133,7 +134,6 @@ def run(ns: argparse.Namespace) -> int:
         skip_cluster_rebuild = (
             no_delta_update
             and _clusters_current(conn)
-            and _cluster_count(conn) > 0
         )
         if skip_cluster_rebuild:
             intended_model, intended_dim, intended_quant = (
@@ -375,6 +375,11 @@ def run(ns: argparse.Namespace) -> int:
                     cluster_plan,
                     all_chunk_ids,
                 )
+            cluster_index_version = (
+                CLUSTER_INDEX_VERSION
+                if cluster_plan is not None
+                else db.read_meta(conn, "cluster_index_version")
+            )
 
             # Step 7: meta.
             _write_meta(
@@ -394,6 +399,7 @@ def run(ns: argparse.Namespace) -> int:
                 incremental.merkle_root(
                     {rel: sha for rel, (sha, _size) in merkle_to_write.items()}
                 ),
+                cluster_index_version,
             )
         manifest = _build_manifest(repo_name, spec, src_dir, repo_dir, db_path,
                                     file_count, len(all_chunks), warnings,
@@ -910,6 +916,8 @@ def _cluster_count(conn) -> int:
 
 
 def _clusters_current(conn) -> bool:
+    if db.read_meta(conn, "cluster_index_version") != CLUSTER_INDEX_VERSION:
+        return False
     total_clusters = db.read_meta(conn, "total_clusters")
     if total_clusters is None:
         return False
@@ -1003,6 +1011,7 @@ def _write_meta(
     edges_flow,
     total_clusters,
     merkle_root_sha,
+    cluster_index_version,
 ):
     rows = [
         ("schema_version", "1.0"),
@@ -1021,6 +1030,8 @@ def _write_meta(
         ("total_clusters", str(total_clusters)),
         ("merkle_root_sha", merkle_root_sha),
     ]
+    if cluster_index_version is not None:
+        rows.append(("cluster_index_version", cluster_index_version))
     conn.executemany(
         "INSERT INTO meta (key, value) VALUES (?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",

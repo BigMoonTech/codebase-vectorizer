@@ -319,8 +319,35 @@ def _concept_cluster_by_nearest_centroid(conn, query: str, *, top_k: int, warnin
     if not centroids:
         return []
 
+    configured_model, configured_dim, configured_quant = embedder.configured_embedder_metadata()
+    warning = _embedder_metadata_mismatch_warning(
+        conn,
+        configured_model,
+        configured_dim,
+        configured_quant,
+        source_label="configured",
+    )
+    if warning is not None:
+        warnings.append(warning)
+        return []
+
     try:
-        query_vec = embedder.make_embedder().embed([query])[0].astype("float32", copy=False)
+        emb = embedder.make_embedder()
+    except Exception as e:
+        warnings.append(f"cluster centroid query failed: {e}")
+        return []
+    warning = _embedder_metadata_mismatch_warning(
+        conn,
+        str(getattr(emb, "model_id", "")),
+        str(getattr(emb, "dim", "")),
+        configured_quant,
+        source_label="actual",
+    )
+    if warning is not None:
+        warnings.append(warning)
+        return []
+    try:
+        query_vec = emb.embed([query])[0].astype("float32", copy=False)
     except Exception as e:
         warnings.append(f"cluster centroid query failed: {e}")
         return []
@@ -358,6 +385,37 @@ def _concept_cluster_by_nearest_centroid(conn, query: str, *, top_k: int, warnin
         (*cluster_ids, top_k),
     ).fetchall()
     return _cluster_chunk_results(rows, scores=scores)
+
+
+def _embedder_metadata_mismatch_warning(
+    conn,
+    model: str,
+    dim: str,
+    quant: str,
+    *,
+    source_label: str,
+) -> str | None:
+    expected = {
+        "model": db.read_meta(conn, "embedder_model"),
+        "dim": db.read_meta(conn, "embedder_dim"),
+        "quant": db.read_meta(conn, "embedder_quant"),
+    }
+    actual = {
+        "model": model,
+        "dim": dim,
+        "quant": quant,
+    }
+    mismatches = [
+        f"{key} indexed={expected[key]!r} {source_label}={actual[key]!r}"
+        for key in ("model", "dim", "quant")
+        if expected[key] != actual[key]
+    ]
+    if not mismatches:
+        return None
+    return (
+        "cluster centroid fallback skipped: embedder metadata mismatch "
+        f"({'; '.join(mismatches)})"
+    )
 
 
 def _flow_query(

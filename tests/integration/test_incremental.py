@@ -202,6 +202,7 @@ def test_noop_update_with_current_clusters_does_not_reembed_for_clustering(
                 (chunk_id,),
             )
             db.write_meta(conn, "total_clusters", "1")
+            db.write_meta(conn, "cluster_index_version", vec_cmd.CLUSTER_INDEX_VERSION)
     finally:
         conn.close()
 
@@ -219,6 +220,47 @@ def test_noop_update_with_current_clusters_does_not_reembed_for_clustering(
         conn.close()
 
     assert cluster_count == 1
+
+
+def test_noop_update_with_current_zero_clusters_does_not_load_embedder(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+
+    def all_noise_clusters(embeddings, **kwargs):
+        return vec_cmd.clusters.ClusterResult(
+            [-1 for _ in range(len(embeddings))],
+            [0.0 for _ in range(len(embeddings))],
+            np.zeros((len(embeddings), 2), dtype="float32"),
+        )
+
+    monkeypatch.setattr(vec_cmd.clusters, "cluster_embeddings", all_noise_clusters)
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM clusters").fetchone()[0] == 0
+        assert db.read_meta(conn, "total_clusters") == "0"
+        assert db.read_meta(conn, "cluster_index_version") == "umap-hdbscan-v1"
+    finally:
+        conn.close()
+
+    def fail_make_embedder():
+        raise AssertionError("make_embedder should not be called for no-op update")
+
+    monkeypatch.setattr(vec_cmd.embedder, "make_embedder", fail_make_embedder)
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM clusters").fetchone()[0] == 0
+        assert db.read_meta(conn, "total_clusters") == "0"
+        assert db.read_meta(conn, "cluster_index_version") == "umap-hdbscan-v1"
+    finally:
+        conn.close()
 
 
 def test_noop_update_with_current_clusters_rebuilds_for_compatible_embedder_metadata_change(
@@ -827,6 +869,12 @@ def test_noop_update_rebuilds_for_compatible_embedder_metadata_change(
     class ChangedStub(vec_cmd.embedder.StubEmbedder):
         model_id = "stub://changed-noop"
 
+    monkeypatch.setattr(
+        vec_cmd.embedder,
+        "configured_embedder_metadata",
+        lambda: ("stub://changed-noop", "1536", "int8"),
+        raising=False,
+    )
     monkeypatch.setattr(vec_cmd.embedder, "make_embedder", lambda: ChangedStub())
 
     _run_vectorize(incremental_source, output_dir, update=True)

@@ -248,13 +248,24 @@ def test_concept_cluster_returns_member_chunks_ranked_by_membership(indexed_grap
 
 def test_concept_cluster_falls_back_to_nearest_centroid(indexed_graph, monkeypatch, capsys):
     class FakeEmbedder:
+        model_id = "fake://cluster-query"
+        dim = 3
+
         def embed(self, texts):
             return np.array([[0.95, 0.05, 0.0]], dtype="float32")
 
+    monkeypatch.setattr(
+        relate.embedder,
+        "configured_embedder_metadata",
+        lambda: ("fake://cluster-query", "3", "int8"),
+    )
     monkeypatch.setattr(relate.embedder, "make_embedder", lambda: FakeEmbedder())
 
     conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
     with conn:
+        db.write_meta(conn, "embedder_model", "fake://cluster-query")
+        db.write_meta(conn, "embedder_dim", "3")
+        db.write_meta(conn, "embedder_quant", "int8")
         conn.executemany(
             "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
             [
@@ -286,13 +297,24 @@ def test_concept_cluster_ignores_summary_only_match_before_centroid_fallback(
     capsys,
 ):
     class FakeEmbedder:
+        model_id = "fake://cluster-query"
+        dim = 3
+
         def embed(self, texts):
             return np.array([[0.95, 0.05, 0.0]], dtype="float32")
 
+    monkeypatch.setattr(
+        relate.embedder,
+        "configured_embedder_metadata",
+        lambda: ("fake://cluster-query", "3", "int8"),
+    )
     monkeypatch.setattr(relate.embedder, "make_embedder", lambda: FakeEmbedder())
 
     conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
     with conn:
+        db.write_meta(conn, "embedder_model", "fake://cluster-query")
+        db.write_meta(conn, "embedder_dim", "3")
+        db.write_meta(conn, "embedder_quant", "int8")
         conn.executemany(
             "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
             [
@@ -324,13 +346,24 @@ def test_concept_cluster_escapes_label_like_wildcards(
     capsys,
 ):
     class FakeEmbedder:
+        model_id = "fake://cluster-query"
+        dim = 3
+
         def embed(self, texts):
             return np.array([[0.95, 0.05, 0.0]], dtype="float32")
 
+    monkeypatch.setattr(
+        relate.embedder,
+        "configured_embedder_metadata",
+        lambda: ("fake://cluster-query", "3", "int8"),
+    )
     monkeypatch.setattr(relate.embedder, "make_embedder", lambda: FakeEmbedder())
 
     conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
     with conn:
+        db.write_meta(conn, "embedder_model", "fake://cluster-query")
+        db.write_meta(conn, "embedder_dim", "3")
+        db.write_meta(conn, "embedder_quant", "int8")
         conn.executemany(
             "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
             [
@@ -353,6 +386,110 @@ def test_concept_cluster_escapes_label_like_wildcards(
     assert blob["warnings"] == []
     assert blob["results"][0]["label"] == "sessions"
     assert blob["results"][0]["chunk_id"] == 2
+
+
+def test_concept_cluster_skips_centroid_fallback_for_same_dim_model_mismatch(
+    indexed_graph,
+    monkeypatch,
+    capsys,
+):
+    class WrongModelEmbedder:
+        model_id = "fake://query-model"
+        dim = 3
+
+        def embed(self, texts):
+            return np.array([[1.0, 0.0, 0.0]], dtype="float32")
+
+    monkeypatch.setattr(
+        relate.embedder,
+        "configured_embedder_metadata",
+        lambda: ("fake://indexed-model", "3", "int8"),
+    )
+    monkeypatch.setattr(relate.embedder, "make_embedder", lambda: WrongModelEmbedder())
+
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        db.write_meta(conn, "embedder_model", "fake://indexed-model")
+        db.write_meta(conn, "embedder_dim", "3")
+        db.write_meta(conn, "embedder_quant", "int8")
+        conn.executemany(
+            "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "payments", "Payment flows.", np.array([0.0, 1.0, 0.0], dtype="float32").tobytes(), 1),
+                (2, "sessions", "Session handling.", np.array([1.0, 0.0, 0.0], dtype="float32").tobytes(), 1),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, ?, ?)",
+            [
+                (3, 1, 0.93),
+                (1, 2, 0.88),
+            ],
+        )
+    conn.close()
+
+    rc, label_blob, _ = _run(_ns(indexed_graph, "concept-cluster", "sessions", top_k=1), capsys)
+    assert rc == 0
+    assert label_blob["warnings"] == []
+    assert label_blob["results"][0]["label"] == "sessions"
+
+    rc, fallback_blob, _ = _run(_ns(indexed_graph, "concept-cluster", "login", top_k=1), capsys)
+
+    assert rc == 0
+    assert fallback_blob["results"] == []
+    assert any(
+        "cluster centroid fallback skipped: embedder metadata mismatch" in warning
+        and "model" in warning
+        for warning in fallback_blob["warnings"]
+    )
+
+
+def test_concept_cluster_skips_centroid_fallback_for_configured_dim_mismatch(
+    indexed_graph,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(
+        relate.embedder,
+        "configured_embedder_metadata",
+        lambda: ("fake://query-model", "4", "int8"),
+    )
+
+    def fail_make_embedder():
+        raise AssertionError("make_embedder should not be called on metadata mismatch")
+
+    monkeypatch.setattr(relate.embedder, "make_embedder", fail_make_embedder)
+
+    conn = db.open_db(paths.repo_dir(indexed_graph) / "index.sqlite")
+    with conn:
+        db.write_meta(conn, "embedder_model", "fake://query-model")
+        db.write_meta(conn, "embedder_dim", "3")
+        db.write_meta(conn, "embedder_quant", "int8")
+        conn.executemany(
+            "INSERT INTO clusters (id, label, summary, centroid, size) VALUES (?, ?, ?, ?, ?)",
+            [
+                (1, "payments", "Payment flows.", np.array([0.0, 1.0, 0.0], dtype="float32").tobytes(), 1),
+                (2, "sessions", "Session handling.", np.array([1.0, 0.0, 0.0], dtype="float32").tobytes(), 1),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, ?, ?)",
+            [
+                (3, 1, 0.93),
+                (1, 2, 0.88),
+            ],
+        )
+    conn.close()
+
+    rc, blob, _ = _run(_ns(indexed_graph, "concept-cluster", "login", top_k=1), capsys)
+
+    assert rc == 0
+    assert blob["results"] == []
+    assert any(
+        "cluster centroid fallback skipped: embedder metadata mismatch" in warning
+        and "dim" in warning
+        for warning in blob["warnings"]
+    )
 
 
 def test_vectorize_writes_concept_clusters_meta_and_label_warnings(
