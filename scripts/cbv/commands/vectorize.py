@@ -135,6 +135,17 @@ def run(ns: argparse.Namespace) -> int:
             and _clusters_current(conn)
             and _cluster_count(conn) > 0
         )
+        if skip_cluster_rebuild:
+            intended_model, intended_dim, intended_quant = (
+                embedder.configured_embedder_metadata()
+            )
+            if _embedder_metadata_mismatch(
+                conn,
+                intended_model,
+                intended_dim,
+                intended_quant,
+            ):
+                skip_cluster_rebuild = False
 
         # Step 5: embed cache misses (skip the model load if there's nothing to embed).
         embedding_cache_hit_rate = 0.0

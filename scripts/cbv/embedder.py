@@ -29,6 +29,8 @@ import numpy as np
 
 DEFAULT_DIM = 1536
 DEFAULT_MODEL_ID = "jinaai/jina-code-embeddings-1.5b"
+DEFAULT_GGUF_REPO = "jinaai/jina-code-embeddings-1.5b-GGUF"
+DEFAULT_GGUF_FILE = "jina-code-embeddings-1.5b.Q4_K_M.gguf"
 
 
 class Embedder(abc.ABC):
@@ -110,12 +112,8 @@ class JinaCodeCPUEmbedder(Embedder):
         from llama_cpp import Llama
         from huggingface_hub import hf_hub_download
 
-        repo = gguf_repo or os.environ.get(
-            "CBV_GGUF_REPO", "jinaai/jina-code-embeddings-1.5b-GGUF"
-        )
-        fname = gguf_file or os.environ.get(
-            "CBV_GGUF_FILE", "jina-code-embeddings-1.5b.Q4_K_M.gguf"
-        )
+        repo = gguf_repo or os.environ.get("CBV_GGUF_REPO", DEFAULT_GGUF_REPO)
+        fname = gguf_file or os.environ.get("CBV_GGUF_FILE", DEFAULT_GGUF_FILE)
         path = hf_hub_download(repo_id=repo, filename=fname)
         self.model_id = f"{repo}/{fname}"
         self.batch_size = batch_size
@@ -144,6 +142,30 @@ class JinaCodeCPUEmbedder(Embedder):
         if not out_rows:
             return np.zeros((0, self.dim), dtype=np.float32)
         return np.stack(out_rows, axis=0)
+
+
+def configured_embedder_metadata() -> tuple[str, str, str]:
+    """Return intended embedder metadata without downloading or loading a model."""
+    if os.environ.get("CBV_STUB_EMBEDDER") == "1":
+        return StubEmbedder.model_id, str(DEFAULT_DIM), "int8"
+
+    if os.environ.get("CBV_FORCE_CPU") == "1":
+        return _configured_cpu_metadata()
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return DEFAULT_MODEL_ID, str(DEFAULT_DIM), "int8"
+    except ImportError:
+        pass
+
+    return _configured_cpu_metadata()
+
+
+def _configured_cpu_metadata() -> tuple[str, str, str]:
+    repo = os.environ.get("CBV_GGUF_REPO", DEFAULT_GGUF_REPO)
+    fname = os.environ.get("CBV_GGUF_FILE", DEFAULT_GGUF_FILE)
+    return f"{repo}/{fname}", str(DEFAULT_DIM), "int8"
 
 
 def _cpu_embedder_or_friendly_error() -> "JinaCodeCPUEmbedder":

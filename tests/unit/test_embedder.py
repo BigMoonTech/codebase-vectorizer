@@ -59,6 +59,25 @@ def test_factory_default_dim_matches_v1_schema(monkeypatch):
     assert e.dim == 1536
 
 
+def test_configured_embedder_metadata_returns_stub_without_loading_model(monkeypatch):
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+
+    assert embedder.configured_embedder_metadata() == ("stub://sha256", "1536", "int8")
+
+
+def test_configured_embedder_metadata_returns_cpu_gguf_id_without_loading_model(monkeypatch):
+    monkeypatch.delenv("CBV_STUB_EMBEDDER", raising=False)
+    monkeypatch.setenv("CBV_FORCE_CPU", "1")
+    monkeypatch.setenv("CBV_GGUF_REPO", "local/repo")
+    monkeypatch.setenv("CBV_GGUF_FILE", "model.gguf")
+
+    assert embedder.configured_embedder_metadata() == (
+        "local/repo/model.gguf",
+        "1536",
+        "int8",
+    )
+
+
 def test_stub_embedder_empty_list_returns_zero_rows():
     e = embedder.StubEmbedder(dim=1536)
     out = e.embed([])

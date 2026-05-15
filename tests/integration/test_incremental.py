@@ -221,6 +221,69 @@ def test_noop_update_with_current_clusters_does_not_reembed_for_clustering(
     assert cluster_count == 1
 
 
+def test_noop_update_with_current_clusters_rebuilds_for_compatible_embedder_metadata_change(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        chunk_id = conn.execute(
+            "SELECT id FROM chunks WHERE file_path = 'zzz_stable.py' ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+        with conn:
+            conn.execute(
+                "INSERT INTO clusters (id, label, summary, centroid, size) "
+                "VALUES (1, 'existing', 'Existing cluster.', ?, 1)",
+                (np.ones(1536, dtype="float32").tobytes(),),
+            )
+            conn.execute(
+                "INSERT INTO chunk_clusters (chunk_id, cluster_id, membership) VALUES (?, 1, 0.9)",
+                (chunk_id,),
+            )
+            db.write_meta(conn, "total_clusters", "1")
+    finally:
+        conn.close()
+
+    class ChangedStub(vec_cmd.embedder.StubEmbedder):
+        model_id = "stub://changed-current-clusters"
+
+    monkeypatch.setattr(
+        vec_cmd.embedder,
+        "configured_embedder_metadata",
+        lambda: ("stub://changed-current-clusters", "1536", "int8"),
+        raising=False,
+    )
+    monkeypatch.setattr(vec_cmd.embedder, "make_embedder", lambda: ChangedStub())
+
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        chunk_count = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        assert db.read_meta(conn, "embedder_model") == "stub://changed-current-clusters"
+        assert db.read_meta(conn, "embedder_dim") == "1536"
+        assert db.read_meta(conn, "embedder_quant") == "int8"
+    finally:
+        conn.close()
+
+    cache_conn = sqlite3.connect(paths.embedding_cache_path())
+    try:
+        changed_cache_rows = cache_conn.execute(
+            "SELECT COUNT(*) FROM embedding_cache WHERE model_id = ?",
+            ("stub://changed-current-clusters",),
+        ).fetchone()[0]
+    finally:
+        cache_conn.close()
+
+    assert chunk_count == before_chunk_count
+    assert changed_cache_rows == chunk_count
+
+
 def test_changed_update_reuses_stored_vectors_for_cluster_planning(
     incremental_source,
     tmp_path,
