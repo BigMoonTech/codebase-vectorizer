@@ -4,6 +4,9 @@ from functools import lru_cache
 from importlib import resources
 
 
+LOADER_SOURCE = "scripts/cbv/tag_queries.py"
+
+
 CAPTURE_TO_NODE_KIND = {
     "definition.class": "class",
     "definition.function": "function",

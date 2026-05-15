@@ -207,6 +207,89 @@ def test_insert_edges_drops_ambiguous_short_name_edges():
     ]
 
 
+def test_insert_edges_filters_short_name_resolution_by_compatible_kind():
+    conn = _conn()
+    ids = graph.insert_nodes(
+        conn,
+        [
+            SymbolNode(
+                kind="file",
+                name="pkg/router.py",
+                short_name="router.py",
+                file_path="pkg/router.py",
+                start_line=1,
+                end_line=1,
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/router.py::route",
+                short_name="route",
+                file_path="pkg/router.py",
+                start_line=1,
+                end_line=3,
+                parent_name="pkg/router.py",
+            ),
+            SymbolNode(
+                kind="class",
+                name="pkg/auth.py::Auth",
+                short_name="Auth",
+                file_path="pkg/auth.py",
+                start_line=1,
+                end_line=10,
+                parent_name="pkg/auth.py",
+            ),
+            SymbolNode(
+                kind="function",
+                name="pkg/auth.py::authenticate_user",
+                short_name="authenticate_user",
+                file_path="pkg/auth.py",
+                start_line=12,
+                end_line=15,
+                parent_name="pkg/auth.py",
+            ),
+            SymbolNode(
+                kind="method",
+                name="pkg/auth.py::Auth::login",
+                short_name="login",
+                file_path="pkg/auth.py",
+                start_line=2,
+                end_line=5,
+                parent_name="pkg/auth.py::Auth",
+            ),
+        ],
+    )
+
+    written = graph.insert_edges(
+        conn,
+        [
+            SymbolEdge(
+                kind="calls",
+                src_name="pkg/router.py::route",
+                dst_name="Auth",
+            ),
+            SymbolEdge(
+                kind="calls",
+                src_name="pkg/router.py::route",
+                dst_name="authenticate_user",
+            ),
+            SymbolEdge(
+                kind="calls",
+                src_name="pkg/router.py::route",
+                dst_name="login",
+            ),
+        ],
+        ids,
+    )
+
+    assert written == 2
+    assert sorted(conn.execute("SELECT dst FROM edges").fetchall()) == sorted(
+        [
+            (ids["pkg/auth.py::authenticate_user"],),
+            (ids["pkg/auth.py::Auth::login"],),
+        ]
+    )
+
+
 def test_insert_edges_drops_unresolved_and_self_edges():
     conn = _conn()
     ids = graph.insert_nodes(

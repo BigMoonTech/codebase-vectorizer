@@ -9,7 +9,16 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from cbv import parser, symbols  # noqa: E402
+from cbv import parser, symbols, tag_queries  # noqa: E402
+
+
+def test_tag_queries_package_reexports_sibling_loader():
+    assert tag_queries.LOADER_SOURCE == "scripts/cbv/tag_queries.py"
+    assert (
+        Path(tag_queries.query_source.__wrapped__.__code__.co_filename).as_posix()
+        .endswith("scripts/cbv/tag_queries.py")
+    )
+    assert "(function_definition)" in tag_queries.query_source("python")
 
 
 def test_python_symbols_extract_defs_imports_calls():
