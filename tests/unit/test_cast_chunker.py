@@ -162,3 +162,58 @@ def test_ast_path_module_only_for_root_children():
     tree = _parse_python(src)
     stmt = tree.root_node.children[0]
     assert cast_chunker._ast_path("python", stmt, [tree.root_node], src) == "module/section"
+
+
+def test_chunk_from_node_single_function():
+    src = b"def add(a, b):\n    return a + b\n"
+    tree = _parse_python(src)
+    fn = tree.root_node.children[0]
+    line_starts = cast_chunker._line_starts(src)
+    chunk = cast_chunker._chunk_from_node(
+        fn, parents=[tree.root_node],
+        language_name="python", file_path="x.py",
+        source=src, line_starts=line_starts,
+    )
+    assert chunk.kind == "function"
+    assert chunk.name == "add"
+    assert chunk.ast_path == "module/function[add]"
+    assert chunk.file_path == "x.py"
+    assert chunk.language == "python"
+    assert chunk.start_line == 1
+    assert chunk.end_line == 2
+    assert chunk.start_byte == 0
+    assert chunk.end_byte == fn.end_byte
+    assert chunk.content == src[fn.start_byte:fn.end_byte].decode("utf-8")
+    assert chunk.token_count == len(chunk.content.split())
+
+
+def test_chunk_from_node_class_with_method_records_method():
+    src = b"class C:\n    def m(self):\n        return 1\n"
+    tree = _parse_python(src)
+    cls = tree.root_node.children[0]
+    body = cls.child_by_field_name("body")
+    fn = next(c for c in body.children if c.type == "function_definition")
+    line_starts = cast_chunker._line_starts(src)
+    chunk = cast_chunker._chunk_from_node(
+        fn, parents=[tree.root_node, cls, body],
+        language_name="python", file_path="x.py",
+        source=src, line_starts=line_starts,
+    )
+    assert chunk.kind == "method"
+    assert chunk.name == "m"
+    assert chunk.ast_path == "module/class[C]/method[m]"
+
+
+def test_chunk_from_node_top_level_statement():
+    src = b"x = 1\n"
+    tree = _parse_python(src)
+    stmt = tree.root_node.children[0]
+    line_starts = cast_chunker._line_starts(src)
+    chunk = cast_chunker._chunk_from_node(
+        stmt, parents=[tree.root_node],
+        language_name="python", file_path="x.py",
+        source=src, line_starts=line_starts,
+    )
+    assert chunk.kind == "section"
+    assert chunk.name is None
+    assert chunk.ast_path == "module/section"

@@ -9,13 +9,14 @@ this module. Tree-sitter node types differ across grammars; the mapping
 is a per-language function that takes (node, ancestor_list) and returns
 the cbv kind string. Unknown nodes fall back to "section".
 
-Chunk construction and the `cast_chunks()` entry point are added in later
-tasks; this module currently exposes only helper functions.
+The `cast_chunks()` entry point is added in a later task.
 """
 from __future__ import annotations
 
 import bisect
 from typing import Callable, List, Optional, Sequence
+
+from cbv.chunker import Chunk, _sha256_hex, _token_count
 
 
 # --- byte / line helpers ---------------------------------------------------
@@ -163,3 +164,91 @@ def _ast_path(language: str, node, parents, source: bytes) -> str:
         parts.append("section")
 
     return "/".join(parts)
+
+
+# --- chunk construction -----------------------------------------------------
+
+
+def _chunk_from_node(
+    node,
+    parents,
+    *,
+    language_name: str,
+    file_path: str,
+    source: bytes,
+    line_starts: Sequence[int],
+) -> Chunk:
+    """Build a Chunk from a single AST node."""
+    return _chunk_from_byte_range(
+        node.start_byte,
+        node.end_byte,
+        node=node,
+        parents=parents,
+        language_name=language_name,
+        file_path=file_path,
+        source=source,
+        line_starts=line_starts,
+    )
+
+
+def _ast_path_for_parent_section(language: str, parents, source: bytes) -> str:
+    parts: list[str] = ["module"]
+    labelled = {"function", "class", "method"}
+    previous_labelled_parent = None
+
+    for i, parent in enumerate(parents[1:], start=1):
+        kind = _kind_for_node(language, parent, parents[:i])
+        if kind not in labelled:
+            continue
+        name = _extract_name(parent, source) or "?"
+        segment = f"{kind}[{name}]"
+        if (
+            _inner_decorated_definition(previous_labelled_parent) == parent
+            and parts[-1] == segment
+        ):
+            previous_labelled_parent = parent
+            continue
+        parts.append(segment)
+        previous_labelled_parent = parent
+
+    parts.append("section")
+    return "/".join(parts)
+
+
+def _chunk_from_byte_range(
+    start_byte: int,
+    end_byte: int,
+    *,
+    node,
+    parents,
+    language_name: str,
+    file_path: str,
+    source: bytes,
+    line_starts: Sequence[int],
+) -> Chunk:
+    """Build a Chunk for a byte range, optionally aligned to one AST node."""
+    text = source[start_byte:end_byte].decode("utf-8", errors="replace")
+
+    if node is None:
+        kind = "section"
+        name = None
+        ast_path = _ast_path_for_parent_section(language_name, parents, source)
+    else:
+        kind = _kind_for_node(language_name, node, parents)
+        name = _extract_name(node, source)
+        ast_path = _ast_path(language_name, node, parents, source)
+
+    return Chunk(
+        file_path=file_path,
+        language=language_name,
+        kind=kind,
+        name=name,
+        ast_path=ast_path,
+        start_line=_byte_to_line(line_starts, start_byte),
+        end_line=_byte_to_line(line_starts, max(end_byte - 1, start_byte)),
+        start_byte=start_byte,
+        end_byte=end_byte,
+        content=text,
+        content_hash=_sha256_hex(text),
+        token_count=_token_count(text),
+    )
