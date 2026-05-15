@@ -11,6 +11,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import pytest
+import numpy as np
 
 from cbv import db, paths  # noqa: E402
 from cbv.commands import vectorize as vec_cmd  # noqa: E402
@@ -315,3 +316,103 @@ def test_update_rebuilds_when_embedder_metadata_changes(
         cache_conn.close()
 
     assert changed_cache_rows == chunk_count
+
+
+def test_update_incompatible_embedder_mismatch_preserves_existing_index(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    _run_vectorize(incremental_source, output_dir)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        before_counts = {
+            "chunks": conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+            "vec": conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0],
+            "nodes": conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+        }
+        before_model = db.read_meta(conn, "embedder_model")
+    finally:
+        conn.close()
+
+    class TinyEmbedder:
+        model_id = "stub://tiny"
+        dim = 8
+
+        def embed(self, texts):
+            return np.ones((len(texts), self.dim), dtype=np.float32)
+
+    monkeypatch.setattr(vec_cmd.embedder, "make_embedder", lambda: TinyEmbedder())
+    (incremental_source / "changed.py").write_text(
+        "def changed():\n"
+        "    return 'after-token'\n",
+        encoding="utf-8",
+    )
+
+    ns = argparse.Namespace(
+        source=str(incremental_source),
+        output_dir=str(output_dir),
+        max_file_mb=1.5,
+        no_cache=False,
+        update=True,
+    )
+    assert vec_cmd.run(ns) != 0
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        after_counts = {
+            "chunks": conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+            "vec": conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0],
+            "nodes": conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
+        }
+        assert after_counts == before_counts
+        assert db.read_meta(conn, "embedder_model") == before_model
+    finally:
+        conn.close()
+
+
+def test_update_chunk_failure_excludes_failed_file_from_new_symbol_graph(
+    incremental_source,
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "index"
+    (incremental_source / "changed.py").write_text(
+        "def before_symbol():\n"
+        "    return 'before'\n",
+        encoding="utf-8",
+    )
+    _run_vectorize(incremental_source, output_dir)
+
+    (incremental_source / "changed.py").write_text(
+        "def after_symbol():\n"
+        "    return 'after'\n",
+        encoding="utf-8",
+    )
+
+    real_chunk_file = vec_cmd.chunker.chunk_file
+
+    def fail_changed(path):
+        if Path(path).name == "changed.py":
+            raise RuntimeError("forced chunk failure")
+        return real_chunk_file(path)
+
+    monkeypatch.setattr(vec_cmd.chunker, "chunk_file", fail_changed)
+    _run_vectorize(incremental_source, output_dir, update=True)
+
+    conn = db.open_db(output_dir / "index.sqlite")
+    try:
+        old_chunk = conn.execute(
+            "SELECT content FROM chunks WHERE file_path = 'changed.py'"
+        ).fetchone()[0]
+        assert "before_symbol" in old_chunk
+        assert conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE name LIKE '%after_symbol%'"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE file_path = 'changed.py'"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()

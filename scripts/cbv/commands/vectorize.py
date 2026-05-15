@@ -131,6 +131,14 @@ def run(ns: argparse.Namespace) -> int:
                 embedder_dim,
                 embedder_quant,
             ):
+                if not _embedder_schema_compatible(embedder_dim, embedder_quant):
+                    print(
+                        "[vectorize] update aborted: embedder metadata changed "
+                        f"to incompatible schema model={embedder_model!r} "
+                        f"dim={embedder_dim!r} quant={embedder_quant!r}",
+                        flush=True,
+                    )
+                    return 2
                 force_full_rebuild = True
                 warnings = []
                 chunks_buf, chunked_paths = _chunk_selected_entries(
@@ -187,6 +195,13 @@ def run(ns: argparse.Namespace) -> int:
         # CORRECTION 1: use db.insert_embedding (vec_int8 JSON path) — NOT q.tobytes().
         if incremental_mode:
             if force_full_rebuild or missing_prior_merkle:
+                if force_full_rebuild and chunked_paths != set(current_shas):
+                    print(
+                        "[vectorize] update aborted: full rebuild could not "
+                        "chunk every current file",
+                        flush=True,
+                    )
+                    return 2
                 delete_paths = _indexed_file_paths(conn)
                 merkle_to_write = {
                     rel: merkle_files[rel]
@@ -203,6 +218,13 @@ def run(ns: argparse.Namespace) -> int:
         else:
             delete_paths = set()
             merkle_to_write = merkle_files
+
+        graph_source_files = _graph_source_files(
+            source_files,
+            set(merkle_to_write),
+            paths_to_chunk - chunked_paths,
+            incremental_mode,
+        )
 
         _clear_symbol_graph(conn)
         _delete_file_chunks(conn, delete_paths)
@@ -237,7 +259,7 @@ def run(ns: argparse.Namespace) -> int:
         nodes_symbol, edges_symbol = _write_symbol_graph(
             conn,
             src_dir,
-            source_files,
+            graph_source_files,
             all_chunks,
             all_chunk_ids,
             warnings,
@@ -382,6 +404,26 @@ def _embedder_metadata_mismatch(
         or db.read_meta(conn, "embedder_dim") != embedder_dim
         or db.read_meta(conn, "embedder_quant") != embedder_quant
     )
+
+
+def _embedder_schema_compatible(embedder_dim: str, embedder_quant: str) -> bool:
+    return embedder_dim == str(embedder.DEFAULT_DIM) and embedder_quant == "int8"
+
+
+def _graph_source_files(
+    source_files: list[tuple[str, str]],
+    merkle_paths: set[str],
+    failed_paths: set[str],
+    incremental_mode: bool,
+) -> list[tuple[str, str]]:
+    if not incremental_mode:
+        return source_files
+    graph_paths = merkle_paths - failed_paths
+    return [
+        (rel_file_path, language)
+        for rel_file_path, language in source_files
+        if rel_file_path in graph_paths
+    ]
 
 
 def _clear_symbol_graph(conn) -> None:
