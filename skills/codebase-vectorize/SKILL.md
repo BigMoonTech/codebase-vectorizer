@@ -8,7 +8,7 @@ description: >
   when the user wants to set up a codebase for later querying via the codebase-ask
   and codebase-identify skills.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Codebase Vectorize

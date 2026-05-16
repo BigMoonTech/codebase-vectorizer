@@ -10,7 +10,7 @@ description: >
   This is the only skill that uses an LLM, and it is optional — codebase-vectorize,
   codebase-ask, and codebase-identify all work fully without it.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Codebase Architecture

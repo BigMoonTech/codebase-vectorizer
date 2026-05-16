@@ -11,7 +11,7 @@ description: >
   user only wants the location of a known symbol, use the codebase-identify
   skill instead.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Codebase Ask
