@@ -1,22 +1,27 @@
 # codebase-vectorizer — Handoff
 
-_Last rewritten: 2026-05-16. This replaces the earlier task-by-task Codex build
-log; that history lives in git._
+_Last updated: 2026-05-16, after the first live install surfaced and fixed four
+Windows blockers (§3c). This replaces the earlier task-by-task Codex build log;
+that history lives in git._
 
 ---
 
 ## 1. Where things stand
 
-- **Branch:** `dev`. Two commits ahead of `origin/dev` (push when ready):
-  - `c2e591c` — reshape skill surface by intent, make LLM use optional
-  - `62c04b0` — rename skills to a consistent `codebase-*` family
+- **Branch:** `dev`. One commit ahead of `origin/dev` (push when ready):
+  - `a070866` — fix four Windows install/index blockers; make GPU the default
+- Earlier on `dev`, already pushed: `2f911b4` (HANDOFF rewrite), `62c04b0`
+  (skill rename), `c2e591c` (intent-shaped skill surface).
 - `main` is preserved.
-- **Version:** v1.0 — `.claude-plugin/plugin.json` is `1.0.0`.
-- **Tests:** full suite `466 passed, 1 skipped` (run with the throwaway
+- **Version:** v1.0.1 — `.claude-plugin/plugin.json` is `1.0.1`.
+- **Tests:** full suite `481 passed, 1 skipped` (run with the throwaway
   `.testvenv/` described in §6).
-- **Status:** code-complete and test-green, **but never run as an installed
-  plugin and never run with the real embedding model.** The next step is the
-  live test in §4.
+- **Status:** the plugin installs and the engine works — it was installed from
+  the marketplace and indexed a real repo (Archon: 853 files, ~11.4k chunks,
+  symbol + flow graphs, 360 clusters). But that first run only succeeded after
+  an agent hand-patched four Windows blockers mid-run. `a070866` fixes all four
+  at the source. A **clean** install + index run, with no manual patching, has
+  not yet been done — that is the next step (§4).
 
 ---
 
@@ -78,14 +83,49 @@ Plan: `docs/plans/2026-05-16-intent-shaped-skill-surface.md`.
 - **Docs/release.** README rewritten as a full plain-language guide;
   `plugin.json` bumped to `1.0.0`.
 
+### 3c. The Windows install-robustness fix
+
+Commit `a070866`; diagnosed by in-session systematic debugging of the first
+live install (a mid-size repo, Archon, on Windows with an NVIDIA GPU). That run
+surfaced four distinct blockers, each now fixed at the root:
+
+- **`llama-cpp-python` had no Windows wheel** → bootstrap fell back to a source
+  build and died with no C/C++ compiler. It is only the *CPU-fallback* embedder
+  backend, yet was a hard `requirements.txt` entry that took the whole install
+  down.
+- **The default GGUF filename did not exist** (`...1.5b.Q4_K_M.gguf` — wrong
+  quant tag, dot instead of dash) → the CPU embedder 404'd on model download.
+- **Bare `torch` from PyPI is CPU-only on Windows** → `torch.cuda.is_available()`
+  was always False even on an NVIDIA GPU, so the fast GPU path was never taken.
+- **`shutil.rmtree` cannot delete git's read-only pack files on Windows** →
+  `source/` cleanup crashed with `PermissionError` on re-index.
+
+Fixes: a new `cbv.fsutil.force_rmtree` (clears the read-only bit and retries;
+used at both cleanup sites); the GGUF default corrected to
+`jina-code-embeddings-1.5b-IQ4_XS.gguf` (a real 4-bit quant); and a **GPU-aware
+bootstrap** — `detect_gpu()` probes `nvidia-smi`, then `torch` is installed from
+the CUDA wheel index when a GPU is present (CPU index otherwise) and
+`llama-cpp-python` is installed only on the CPU stack from a prebuilt-wheel
+index. No source build is ever attempted; GPU is the default path and CPU is a
+genuine fallback. `torch` and `llama-cpp-python` were removed from
+`requirements.txt` (bootstrap owns them). Overrides: `CBV_FORCE_CPU`,
+`CBV_TORCH_INDEX_URL`, `CBV_LLAMA_INDEX_URL`.
+
 ---
 
-## 4. Next step (priority): the live install test
+## 4. Next step (priority): the clean live install test
 
-Nobody has run this as an installed plugin or with the real model. This test is
+The plugin has been installed and run once — but only with an agent hand-fixing
+the four blockers in §3c mid-run. `a070866` fixes them at the source, so the job
+now is a **clean** run from a fresh environment with no manual patching. This is
 the gate between "passes its tests" and "actually works." Run the stages in
 order; each has an explicit success signal. Stop and record the symptom if a
 stage fails — a later stage cannot vindicate an earlier failure.
+
+**Start clean.** The existing venv at `<data_home>/python-env/` was hand-patched
+during the first run, so `deps_installed()` would short-circuit the new
+GPU-aware bootstrap and never exercise the fix. **Delete `python-env/` before
+re-testing** so the bootstrap rebuilds from scratch.
 
 **Pick a test repo deliberately.** Use a repo **you know well** (so you can
 judge whether answers are correct) that is **mid-size** — roughly 100–400 source
@@ -101,21 +141,28 @@ codebase-vectorizer@codebase-vectorizer-marketplace --scope user`.
 
 ### Stage 1 — Bootstrap the environment
 Trigger the first index ("index <repo>"). `bootstrap.py` finds Python 3.10–3.13,
-builds the venv at `${CLAUDE_PLUGIN_DATA}/python-env/`, and pip-installs deps
-(`torch`, `sqlite-vec`, `tree-sitter-language-pack`, `umap-learn`, `hdbscan`, …).
+builds the venv at `${CLAUDE_PLUGIN_DATA}/python-env/`, then installs deps from
+prebuilt wheels in steps: `torch` from a CUDA or CPU wheel index depending on
+whether `nvidia-smi` is found, the core requirements, and — CPU stack only —
+`llama-cpp-python` from a prebuilt-wheel index. No source build is attempted.
 This is ~4 GB and several minutes.
 **Success:** the venv builds and all deps install with no wheel failures;
-`run.sh info` / `run.ps1 info` reports `python_env_ready: True`.
-**Watch for:** the Python-version trap — the bootstrap must select 3.10–3.13,
-not 3.14. `torch` / `llama-cpp-python` wheels must exist for the chosen Python.
+`run.ps1 info` / `run.sh info` reports `python_env_ready: True` and a
+`gpu_detected:` line matching the machine (True on an NVIDIA box).
+**Watch for:** the Python-version trap — the bootstrap needs a 3.10–3.13
+interpreter on PATH, not 3.14. If GPU detection is wrong, override with
+`CBV_FORCE_CPU=1`, or point `CBV_TORCH_INDEX_URL` at the right CUDA series.
 
 ### Stage 2 — Model download
-The first embedding step downloads the `jina-code-embeddings-1.5b` GGUF
-(~750 MB) into the HuggingFace cache.
-**Success:** download completes and the model loads.
-**Watch for:** the default `CBV_GGUF_REPO` / `CBV_GGUF_FILE` may not resolve to
-a real artifact — this is a known risk. If the download fails, that is a finding;
-the fix is to set those env vars to a known-good community quant.
+The first embedding step downloads the model into the HuggingFace cache; which
+artifact depends on the path taken. The **GPU path** pulls the full
+`jina-code-embeddings-1.5b` model (~3 GB) and runs it in FP16. The **CPU path**
+pulls a quantized GGUF — the default is now `jina-code-embeddings-1.5b-IQ4_XS`
+(~896 MB), a 4-bit quant that exists in the repo (the old `Q4_K_M` default
+404'd; fixed in `a070866`).
+**Success:** the download completes and the model loads on the expected device.
+**Watch for:** on a non-NVIDIA machine, confirm it cleanly took the CPU/GGUF
+path. `CBV_GGUF_FILE` overrides the quant (e.g. `-Q8_0` for best quality).
 
 ### Stage 3 — Index the repo ("vectorize" — build, map, classify)
 Let `codebase-vectorize` index the chosen repo. Read the JSON summary on the
@@ -226,6 +273,10 @@ not the format.
   Windows). The venv is `python-env/`; per-repo data is under `repos/<name>/`.
 - **Reset:** delete `python-env/` to rebuild the environment; delete
   `repos/<name>/` to drop one index.
+- **GPU vs CPU:** the bootstrap auto-detects an NVIDIA GPU via `nvidia-smi` and
+  installs the CUDA `torch` build; otherwise it installs CPU `torch` plus the
+  `llama-cpp-python` GGUF backend. Force CPU with `CBV_FORCE_CPU=1`; override
+  the wheel indexes with `CBV_TORCH_INDEX_URL` / `CBV_LLAMA_INDEX_URL`.
 - **`.testvenv/` in the repo root** is a throwaway, git-ignored virtual
   environment used to run `pytest` without the full ~4 GB plugin bootstrap. It
   is not part of the plugin — ignore or delete it.
