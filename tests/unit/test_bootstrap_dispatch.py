@@ -161,3 +161,97 @@ def test_cli_parses_apply_llm_artifacts_args():
 def test_bootstrap_allowlist_includes_llm_verbs():
     assert "llm-payload" in bootstrap.ALLOWED_SUBCOMMANDS
     assert "apply-llm-artifacts" in bootstrap.ALLOWED_SUBCOMMANDS
+
+
+# --- GPU-aware bootstrap install plan -------------------------------------
+
+
+class _FakeProc:
+    def __init__(self, returncode):
+        self.returncode = returncode
+
+
+def test_detect_gpu_false_when_force_cpu(monkeypatch):
+    """CBV_FORCE_CPU=1 forces the CPU stack even if a GPU is present."""
+    monkeypatch.setenv("CBV_FORCE_CPU", "1")
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/nvidia-smi")
+    assert bootstrap.detect_gpu() is False
+
+
+def test_detect_gpu_false_when_no_nvidia_smi(monkeypatch):
+    monkeypatch.delenv("CBV_FORCE_CPU", raising=False)
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: None)
+    assert bootstrap.detect_gpu() is False
+
+
+def test_detect_gpu_true_when_nvidia_smi_succeeds(monkeypatch):
+    monkeypatch.delenv("CBV_FORCE_CPU", raising=False)
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(bootstrap.subprocess, "run", lambda *a, **k: _FakeProc(0))
+    assert bootstrap.detect_gpu() is True
+
+
+def test_detect_gpu_false_when_nvidia_smi_errors(monkeypatch):
+    monkeypatch.delenv("CBV_FORCE_CPU", raising=False)
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr(bootstrap.subprocess, "run", lambda *a, **k: _FakeProc(9))
+    assert bootstrap.detect_gpu() is False
+
+
+def test_torch_index_url_gpu_vs_cpu(monkeypatch):
+    monkeypatch.delenv("CBV_TORCH_INDEX_URL", raising=False)
+    assert "cu128" in bootstrap.torch_index_url(gpu=True)
+    assert bootstrap.torch_index_url(gpu=False).endswith("/cpu")
+
+
+def test_torch_index_url_respects_override(monkeypatch):
+    monkeypatch.setenv("CBV_TORCH_INDEX_URL", "https://example.invalid/whl/cu121")
+    assert bootstrap.torch_index_url(gpu=True) == "https://example.invalid/whl/cu121"
+    assert bootstrap.torch_index_url(gpu=False) == "https://example.invalid/whl/cu121"
+
+
+def test_build_install_plan_gpu_skips_llama_and_uses_cuda_index(monkeypatch):
+    monkeypatch.delenv("CBV_TORCH_INDEX_URL", raising=False)
+    plan = bootstrap.build_install_plan(gpu=True)
+    assert len(plan) == 2
+    torch_step, core_step = plan
+    assert torch_step[0] == "torch>=2.3"
+    assert "--index-url" in torch_step
+    assert bootstrap.CUDA_TORCH_INDEX in torch_step
+    assert "-r" in core_step
+    # llama-cpp-python is never installed on the GPU stack.
+    assert not any("llama-cpp-python" in arg for step in plan for arg in step)
+
+
+def test_build_install_plan_cpu_installs_llama_from_wheel_index(monkeypatch):
+    monkeypatch.delenv("CBV_TORCH_INDEX_URL", raising=False)
+    monkeypatch.delenv("CBV_LLAMA_INDEX_URL", raising=False)
+    plan = bootstrap.build_install_plan(gpu=False)
+    assert len(plan) == 3
+    torch_step, _core_step, llama_step = plan
+    assert bootstrap.CPU_TORCH_INDEX in torch_step
+    assert llama_step[0] == "llama-cpp-python>=0.2.80"
+    assert "--extra-index-url" in llama_step
+    assert bootstrap.LLAMA_CPU_WHEEL_INDEX in llama_step
+    # Wheel-only: the CPU stack never triggers a source build of llama-cpp-python.
+    assert "--only-binary=:all:" in llama_step
+
+
+def test_build_install_plan_cpu_respects_llama_index_override(monkeypatch):
+    monkeypatch.setenv("CBV_LLAMA_INDEX_URL", "https://example.invalid/llama/whl")
+    llama_step = bootstrap.build_install_plan(gpu=False)[-1]
+    assert "https://example.invalid/llama/whl" in llama_step
+
+
+def test_requirements_txt_excludes_torch_and_llama():
+    """torch and llama-cpp-python must NOT be plain requirements — bootstrap
+    installs them separately with platform-correct wheel indexes."""
+    text = bootstrap.REQS.read_text(encoding="utf-8")
+    requirement_lines = [
+        ln.strip() for ln in text.splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    joined = "\n".join(requirement_lines)
+    assert "torch" not in joined
+    assert "llama" not in joined
+    assert any(ln.startswith("transformers") for ln in requirement_lines)

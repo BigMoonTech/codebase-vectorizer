@@ -85,6 +85,20 @@ def test_stub_embedder_empty_list_returns_zero_rows():
     assert out.dtype == np.float32
 
 
+def test_default_gguf_filename_follows_real_naming():
+    """The GGUF repo names files jina-code-embeddings-1.5b-<QUANT>.gguf
+    (dash-separated). A dot before the quant tag — the old default,
+    `...1.5b.Q4_K_M.gguf` — points at a file that does not exist and 404s."""
+    import re
+
+    assert re.fullmatch(
+        r"jina-code-embeddings-1\.5b-[A-Z0-9_]+\.gguf",
+        embedder.DEFAULT_GGUF_FILE,
+    ), f"default GGUF filename does not match the repo's naming: {embedder.DEFAULT_GGUF_FILE!r}"
+    # IQ4_XS is the chosen CPU-fallback default: 4-bit, balanced size/quality.
+    assert embedder.DEFAULT_GGUF_FILE == "jina-code-embeddings-1.5b-IQ4_XS.gguf"
+
+
 def test_make_embedder_raises_friendly_error_when_cpu_unavailable(monkeypatch):
     """If llama_cpp can't be imported, make_embedder() must raise a clear
     RuntimeError rather than letting ImportError propagate."""

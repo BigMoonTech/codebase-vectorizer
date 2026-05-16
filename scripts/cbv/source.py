@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from cbv import fsutil
+
 _URL_RE = re.compile(r"^(?:https?://|git@|ssh://|git://)")
 
 
@@ -53,10 +55,12 @@ def populate_from_url(url: str, dest: Path) -> str:
             ["git", "-C", str(dest), "rev-parse", "HEAD"], text=True
         ).strip()
         # Remove .git/ — we don't need history; it's just bytes from now on.
-        shutil.rmtree(dest / ".git", ignore_errors=True)
+        # force_rmtree clears the read-only bit git sets on pack files, so
+        # .git is fully deleted on Windows instead of being left behind.
+        fsutil.force_rmtree(dest / ".git", ignore_errors=True)
         return sha
     except Exception:
-        shutil.rmtree(dest, ignore_errors=True)
+        fsutil.force_rmtree(dest, ignore_errors=True)
         raise
 
 

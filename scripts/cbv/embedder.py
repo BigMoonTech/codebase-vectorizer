@@ -13,7 +13,12 @@ set CBV_FORCE_CPU=1.
 
 The GGUF repo and filename are env-configurable:
   CBV_GGUF_REPO   default 'jinaai/jina-code-embeddings-1.5b-GGUF'
-  CBV_GGUF_FILE   default 'jina-code-embeddings-1.5b.Q4_K_M.gguf'
+  CBV_GGUF_FILE   default 'jina-code-embeddings-1.5b-IQ4_XS.gguf'
+
+The default is a 4-bit quant (~896 MB) — the balanced size/quality
+pick for the CPU fallback. The repo also publishes -Q8_0 (best
+quality, ~1.65 GB) and smaller IQ3_* quants; override CBV_GGUF_FILE to
+switch. Note the repo names files with a dash before the quant tag.
 
 Slice 2 adds tree-sitter chunking; the embedder itself doesn't change.
 Slice 5 adds the cross-encoder reranker (separate module).
@@ -30,7 +35,7 @@ import numpy as np
 DEFAULT_DIM = 1536
 DEFAULT_MODEL_ID = "jinaai/jina-code-embeddings-1.5b"
 DEFAULT_GGUF_REPO = "jinaai/jina-code-embeddings-1.5b-GGUF"
-DEFAULT_GGUF_FILE = "jina-code-embeddings-1.5b.Q4_K_M.gguf"
+DEFAULT_GGUF_FILE = "jina-code-embeddings-1.5b-IQ4_XS.gguf"
 
 
 class Embedder(abc.ABC):

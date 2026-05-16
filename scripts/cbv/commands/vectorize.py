@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -31,6 +30,7 @@ from cbv import (
     db,
     embedder,
     flow,
+    fsutil,
     graph,
     identifiers,
     incremental,
@@ -70,8 +70,8 @@ def run(ns: argparse.Namespace) -> int:
     # Step 1: resolve source. Always refresh source/ so delta planning compares
     # the current source bytes against the prior merkle table.
     # CORRECTION 2: rmtree before calling populate_from_X (T6 added FileExistsError guard).
-    if src_dir.exists():
-        shutil.rmtree(src_dir)
+    # force_rmtree tolerates read-only git pack files left over on Windows.
+    fsutil.force_rmtree(src_dir)
     if source.is_git_url(spec):
         commit_sha = source.populate_from_url(spec, src_dir)
     else:

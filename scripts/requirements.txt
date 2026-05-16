@@ -1,10 +1,19 @@
-# codebase-vectorizer v1.0 Slice 1 dependencies.
-# Pin minor-version floors per spec; let pip resolve the latest compatible.
+# codebase-vectorizer v1.0 core dependencies — every package here ships
+# prebuilt wheels for CPython 3.10-3.13 on Windows, macOS, and Linux, so
+# `pip install --only-binary=:all:` never needs a C/C++ compiler.
+#
+# torch and llama-cpp-python are deliberately NOT listed here. bootstrap.py
+# installs them separately with platform-correct wheel indexes:
+#   - torch: from the CUDA wheel index when an NVIDIA GPU is detected,
+#     otherwise the CPU wheel index.
+#   - llama-cpp-python: only on the CPU stack (it is the CPU embedder
+#     backend), from a prebuilt-wheel index so no compiler is required.
+# Listing them here as plain requirements is what broke Windows installs:
+# PyPI has no llama-cpp-python wheel for Windows, and PyPI torch on
+# Windows is CPU-only even on NVIDIA machines.
 sqlite-vec>=0.1.9,<0.2.0
 transformers>=4.42
 sentence-transformers>=3.0
-torch>=2.3
-llama-cpp-python>=0.2.80
 huggingface_hub>=0.23.0
 numpy>=1.26
 pathspec>=0.12
