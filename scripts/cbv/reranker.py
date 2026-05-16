@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import os
 
-DEFAULT_RERANKER = "mixedbread-ai/mxbai-rerank-large-v2"
+# A genuine sequence-classification cross-encoder, which sentence-transformers'
+# CrossEncoder is built for. NOT mxbai-rerank-v2: v2 is a generative Qwen2 model
+# that saturates to ~1.0 through CrossEncoder and cannot rank (see
+# tests/integration/test_reranker_model.py).
+DEFAULT_RERANKER = "mixedbread-ai/mxbai-rerank-base-v1"
 
 
 class Reranker:
