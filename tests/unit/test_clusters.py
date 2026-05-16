@@ -83,3 +83,26 @@ def test_local_llm_cluster_labeler_uses_configured_command(monkeypatch, tmp_path
 
     assert label == "auth session"
     assert summary == "Authentication flows."
+
+
+def test_local_llm_labeler_decodes_utf8_output(tmp_path, monkeypatch):
+    """Regression: a labeler command emitting UTF-8 JSON with non-ASCII
+    characters round-trips identically on Linux, WSL2, and Windows."""
+    em_dash = chr(0x2014)
+    e_acute = chr(0xE9)
+    script = tmp_path / "emit.py"
+    script_lines = [
+        "import sys, json",
+        "sys.stdin.read()",
+        "summary = 'Caf' + chr(0xE9) + ' ' + chr(0x2014) + ' ok'",
+        "payload = json.dumps({'label': 'Auth Layer', 'summary': summary}, "
+        "ensure_ascii=False)",
+        "sys.stdout.buffer.write(payload.encode('utf-8'))",
+    ]
+    script.write_text("\n".join(script_lines) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CBV_CLUSTER_LABEL_COMMAND", f'"{sys.executable}" "{script}"')
+
+    label, summary = clusters.LocalLLMClusterLabeler().label(["sample chunk"])
+
+    assert label == "Auth Layer"
+    assert summary == "Caf" + e_acute + " " + em_dash + " ok"

@@ -5,8 +5,8 @@ description: >
   future queries. Use when the user says "vectorize this repo", "index this codebase",
   "index <repo>", "build an index for <repo>", "make this repo searchable", "RAG this
   repo", or provides a GitHub URL and asks to index/learn/explore it. Also triggers
-  when the user wants to set up a codebase for later querying via the codebase-query
-  skill.
+  when the user wants to set up a codebase for later querying via the codebase-ask
+  and codebase-identify skills.
 metadata:
   version: "1.0.0"
 ---
@@ -63,11 +63,15 @@ The venv is named `python-env/` — not `.venv` — so it can never be mistaken 
 a project's own virtual environment. It is invoked by absolute path and **never
 activated**.
 
-`ARCHITECTURE.md` generation uses `CBV_ARCHITECTURE_COMMAND` when configured
-and otherwise writes a deterministic fallback with a warning. `bench <repo>`
-writes `bench/results.json`; if no benchmark query rows are found, it writes
-zeroed metrics. `vectorize --bench` runs that same benchmark step after
-indexing and may likewise write zeroed results when no rows are present.
+Indexing uses **no LLM**. Two artifacts — the concept-cluster labels and
+`ARCHITECTURE.md` — are written as deterministic placeholders, and the summary
+reports `"llm_artifacts_pending": true`. To replace those placeholders with
+real LLM-written prose, the user runs the separate, optional
+`architecture-codebase` skill. Everything else (chunks, graphs, retrieval) is
+fully usable without it. `bench <repo>` writes `bench/results.json`; if no
+benchmark query rows are found, it writes zeroed metrics. `vectorize --bench`
+runs that same benchmark step after indexing and may likewise write zeroed
+results when no rows are present.
 
 ## Step 1 — Run the indexer
 
@@ -117,7 +121,8 @@ The script ends with a JSON summary on the last line of stdout:
   "elapsed_seconds": 281.4,
   "embedding_cache_hit_rate": 0.0,
   "warnings": [],
-  "bench_results": {}
+  "bench_results": {},
+  "llm_artifacts_pending": true
 }
 ```
 
@@ -136,11 +141,15 @@ Tell the user in plain English:
 
 - Repo name + counts (files, chunks, elapsed) from the JSON summary.
 - Where the index lives (the `db_path` directory).
-- That they can now ask codebase questions **from any working directory** and
-  the `codebase-query` skill will answer using the index.
+- That they can now ask codebase questions **from any working directory**:
+  the `codebase-ask` skill answers how/why/relationship questions, and
+  `codebase-identify` handles fast "where is X" lookups.
+- That the concept-cluster labels and `ARCHITECTURE.md` are placeholders for
+  now; the optional `architecture-codebase` skill upgrades them to real
+  LLM-written prose if they want it.
 
 **Do not** read further into the repo after this. Future questions go through
-the query skill, not by burning tokens here.
+the query skills, not by burning tokens here.
 
 ## Troubleshooting
 

@@ -88,6 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
     pf.add_argument("--top-k", type=int, default=10,
                     help="number of results to return (default 10)")
 
+    pp = sub.add_parser("llm-payload",
+                        help="Print the LLM input payload for an indexed repo")
+    pp.add_argument("repo", help="indexed repo name")
+
+    pa = sub.add_parser("apply-llm-artifacts",
+                        help="Write agent-generated cluster labels and ARCHITECTURE.md")
+    pa.add_argument("repo", help="indexed repo name")
+    pa.add_argument("result_path", help="path to the JSON result file")
+
     sub.add_parser("list", help="List every indexed repo")
     sub.add_parser("info", help="Print plugin paths and readiness")
 
@@ -109,6 +118,10 @@ def _import_command(verb: str):
         from cbv.commands import graph_cmd as mod
     elif verb == "flow":
         from cbv.commands import flow_cmd as mod
+    elif verb == "llm-payload":
+        from cbv.commands import llm_payload as mod
+    elif verb == "apply-llm-artifacts":
+        from cbv.commands import apply_llm as mod
     elif verb == "list":
         from cbv.commands import list_cmd as mod
     elif verb == "info":
@@ -128,6 +141,8 @@ DISPATCH: Dict[str, Callable[[argparse.Namespace], int]] = {
     "relate":    lambda ns: _import_command("relate").run(ns),
     "graph":     lambda ns: _import_command("graph").run(ns),
     "flow":      lambda ns: _import_command("flow").run(ns),
+    "llm-payload": lambda ns: _import_command("llm-payload").run(ns),
+    "apply-llm-artifacts": lambda ns: _import_command("apply-llm-artifacts").run(ns),
     "list":      lambda ns: _import_command("list").run(ns),
     "info":      lambda ns: _import_command("info").run(ns),
 }

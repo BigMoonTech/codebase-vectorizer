@@ -36,7 +36,8 @@ from cbv.paths import (  # noqa: E402
 
 REQS = SCRIPT_DIR / "requirements.txt"
 SUPPORTED_PY = {(3, 10), (3, 11), (3, 12), (3, 13)}
-ALLOWED_SUBCOMMANDS = {"vectorize", "query", "stats", "bench", "relate", "graph", "flow", "list"}
+ALLOWED_SUBCOMMANDS = {"vectorize", "query", "stats", "bench", "relate", "graph", "flow",
+                       "llm-payload", "apply-llm-artifacts", "list"}
 CORE_DEPENDENCY_PROBE = (
     "import sqlite_vec, transformers, sentence_transformers, numpy, pathspec, requests, "
     "huggingface_hub, tree_sitter, tree_sitter_language_pack, networkx, umap, hdbscan"
@@ -165,6 +166,8 @@ def usage() -> int:
         "  relate <name> <verb> ...    run graph relationship queries\n"
         "  graph <name> <symbol>       alias for relate neighbors\n"
         "  flow <name> <symbol>        alias for relate paths-through\n"
+        "  llm-payload <name>          print the LLM input payload for a repo\n"
+        "  apply-llm-artifacts <name> <file>  write agent-generated labels/architecture\n"
         "  list                        list every indexed repo\n"
         "  info                        print all paths and readiness",
         file=sys.stderr,

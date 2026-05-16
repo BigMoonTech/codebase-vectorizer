@@ -141,3 +141,23 @@ def test_cli_unknown_verb_errors(capsys):
     parser = cli.build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["nonsense"])
+
+
+def test_cli_parses_llm_payload_args():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["llm-payload", "myrepo"])
+    assert ns.verb == "llm-payload"
+    assert ns.repo == "myrepo"
+
+
+def test_cli_parses_apply_llm_artifacts_args():
+    parser = cli.build_parser()
+    ns = parser.parse_args(["apply-llm-artifacts", "myrepo", "result.json"])
+    assert ns.verb == "apply-llm-artifacts"
+    assert ns.repo == "myrepo"
+    assert ns.result_path == "result.json"
+
+
+def test_bootstrap_allowlist_includes_llm_verbs():
+    assert "llm-payload" in bootstrap.ALLOWED_SUBCOMMANDS
+    assert "apply-llm-artifacts" in bootstrap.ALLOWED_SUBCOMMANDS

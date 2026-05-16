@@ -24,8 +24,9 @@ class LocalLLMArchitectureWriter(ArchitectureWriter):
             result = subprocess.run(
                 command,
                 input=json.dumps(payload, sort_keys=True),
-                text=True,
                 capture_output=True,
+                encoding="utf-8",
+                errors="replace",
                 shell=True,
                 timeout=timeout,
             )

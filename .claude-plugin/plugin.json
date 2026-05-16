@@ -1,6 +1,6 @@
 {
   "name": "codebase-vectorizer",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "Index a GitHub repo or local folder into a local SQLite + vector database, then answer codebase questions via cheap RAG lookups instead of re-scanning files every turn.",
   "author": {
     "name": "Josh Aguilar",

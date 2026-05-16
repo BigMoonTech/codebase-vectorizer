@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import time
 from dataclasses import replace
@@ -462,9 +463,19 @@ def run(ns: argparse.Namespace) -> int:
         "embedding_cache_hit_rate": embedding_cache_hit_rate,
         "warnings": warnings,
         "bench_results": bench_results,
+        "llm_artifacts_pending": _llm_artifacts_pending(clusters_indexed),
     }
     print(json.dumps(summary), flush=True)
     return 0
+
+
+def _llm_artifacts_pending(clusters_indexed: int) -> bool:
+    """True when an LLM-backed artifact was left as a deterministic
+    placeholder because no LLM command was configured. The vectorize-repo
+    skill reads this flag and finalizes the artifacts in-session."""
+    architecture_unset = not os.environ.get("CBV_ARCHITECTURE_COMMAND")
+    cluster_label_unset = not os.environ.get("CBV_CLUSTER_LABEL_COMMAND")
+    return bool(architecture_unset or (cluster_label_unset and clusters_indexed > 0))
 
 
 def _embed_in_batches(emb: embedder.Embedder, texts: List[str], batch: int):

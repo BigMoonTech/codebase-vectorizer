@@ -109,3 +109,28 @@ def test_local_llm_writer_converts_timeout_to_runtime_error(monkeypatch):
         assert "timed out" in str(e)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_local_llm_writer_decodes_utf8_output(tmp_path, monkeypatch):
+    """Regression: non-ASCII command output (em-dash, accented chars) must
+    survive regardless of the OS locale codepage. Windows' default text
+    decode uses the ANSI codepage and would mojibake this; the writer
+    forces UTF-8 so Linux, WSL2, and Windows behave identically."""
+    em_dash = chr(0x2014)
+    e_acute = chr(0xE9)
+    script = tmp_path / "emit.py"
+    script_lines = [
+        "import sys",
+        "sys.stdin.read()",
+        "marker = '# Arch ' + chr(0x2014) + ' caf' + chr(0xE9) + chr(10)",
+        "sys.stdout.buffer.write(marker.encode('utf-8'))",
+    ]
+    script.write_text("\n".join(script_lines) + "\n", encoding="utf-8")
+    monkeypatch.setenv(
+        "CBV_ARCHITECTURE_COMMAND",
+        '"' + sys.executable + '" "' + str(script) + '"',
+    )
+
+    out = architecture.LocalLLMArchitectureWriter().write({"repo_name": "r"})
+    assert em_dash in out
+    assert ("caf" + e_acute) in out

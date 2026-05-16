@@ -35,8 +35,9 @@ class LocalLLMClusterLabeler(ClusterLabeler):
         result = subprocess.run(
             command,
             input=payload,
-            text=True,
             capture_output=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             shell=True,
         )
