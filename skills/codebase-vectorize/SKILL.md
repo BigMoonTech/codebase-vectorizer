@@ -1,5 +1,5 @@
 ---
-name: vectorize-repo
+name: codebase-vectorize
 description: >
   Clone, chunk, and vector-index a public GitHub repo (or local folder) for cheap
   future queries. Use when the user says "vectorize this repo", "index this codebase",
@@ -11,7 +11,7 @@ metadata:
   version: "1.0.0"
 ---
 
-# Vectorize Repo
+# Codebase Vectorize
 
 Index a public GitHub repo (or local folder) into a local SQLite database (FTS5 +
 `sqlite-vec`) so future codebase questions cost a few hundred tokens instead of
@@ -67,7 +67,7 @@ Indexing uses **no LLM**. Two artifacts — the concept-cluster labels and
 `ARCHITECTURE.md` — are written as deterministic placeholders, and the summary
 reports `"llm_artifacts_pending": true`. To replace those placeholders with
 real LLM-written prose, the user runs the separate, optional
-`architecture-codebase` skill. Everything else (chunks, graphs, retrieval) is
+`codebase-architecture` skill. Everything else (chunks, graphs, retrieval) is
 fully usable without it. `bench <repo>` writes `bench/results.json`; if no
 benchmark query rows are found, it writes zeroed metrics. `vectorize --bench`
 runs that same benchmark step after indexing and may likewise write zeroed
@@ -145,7 +145,7 @@ Tell the user in plain English:
   the `codebase-ask` skill answers how/why/relationship questions, and
   `codebase-identify` handles fast "where is X" lookups.
 - That the concept-cluster labels and `ARCHITECTURE.md` are placeholders for
-  now; the optional `architecture-codebase` skill upgrades them to real
+  now; the optional `codebase-architecture` skill upgrades them to real
   LLM-written prose if they want it.
 
 **Do not** read further into the repo after this. Future questions go through

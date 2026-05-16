@@ -4,7 +4,7 @@
 
 **Goal:** Reshape the plugin's skill surface so it is split by *user intent* (build / locate / understand / document) instead of by retrieval mechanism, and quarantine all LLM use into one optional skill.
 
-**Architecture:** The `cbv` Python engine and all CLI verbs (`vectorize`, `query`, `relate`, `graph`, `flow`, `stats`, `bench`, `llm-payload`, `apply-llm-artifacts`) are unchanged — they are already correct and tested. Only the skill layer (`skills/`) and the auto-LLM wiring change. The previous "Path A" (auto-wire the `claude` CLI during `vectorize`) is removed entirely; LLM-written artifacts become an explicit, optional `architecture-codebase` skill driven by the in-session agent via the existing `llm-payload` / `apply-llm-artifacts` commands.
+**Architecture:** The `cbv` Python engine and all CLI verbs (`vectorize`, `query`, `relate`, `graph`, `flow`, `stats`, `bench`, `llm-payload`, `apply-llm-artifacts`) are unchanged — they are already correct and tested. Only the skill layer (`skills/`) and the auto-LLM wiring change. The previous "Path A" (auto-wire the `claude` CLI during `vectorize`) is removed entirely; LLM-written artifacts become an explicit, optional `codebase-architecture` skill driven by the in-session agent via the existing `llm-payload` / `apply-llm-artifacts` commands.
 
 **Tech Stack:** Claude Code skills (SKILL.md + YAML front-matter), the existing `cbv` Python package, pytest.
 
@@ -14,19 +14,19 @@
 
 The plugin shipped three skills split by *mechanism*: `codebase-query` (semantic search) and `codebase-relate` (graph traversal). Users do not think in "is this a structural or semantic question" — they have a question. The surface must split by intent. Final intent split:
 
-- **build** the index — `vectorize-repo`
+- **build** the index — `codebase-vectorize`
 - **locate** a known thing — `codebase-identify` (fast lane)
 - **understand / relate** something — `codebase-ask` (full lane + relate/graph/flow verbs)
-- **document** with LLM prose — `architecture-codebase` (optional, the only LLM skill)
+- **document** with LLM prose — `codebase-architecture` (optional, the only LLM skill)
 
-LLM use is fully optional: `vectorize`, `query`, `relate`, `graph`, `flow`, `stats` need no LLM. The LLM touches only two cosmetic artifacts — concept-cluster *labels* and `ARCHITECTURE.md`. Those are produced on demand by `architecture-codebase`.
+LLM use is fully optional: `vectorize`, `query`, `relate`, `graph`, `flow`, `stats` need no LLM. The LLM touches only two cosmetic artifacts — concept-cluster *labels* and `ARCHITECTURE.md`. Those are produced on demand by `codebase-architecture`.
 
 ## Decisions locked
 
-- **Keep** `vectorize-repo` as the skill name (user prefers current naming). The `codebase-*` family is slightly inconsistent with it; accepted.
+- **Rename** the two non-conforming skills so the whole family shares the `codebase-*` prefix: `vectorize-repo` -> `codebase-vectorize`, `architecture-codebase` -> `codebase-architecture`.
 - **Keep** the `CBV_*_COMMAND` hook and `LocalLLMClusterLabeler` / `LocalLLMArchitectureWriter` classes in `clusters.py` / `architecture.py`. With no auto-wiring they simply fall back to deterministic placeholders during `vectorize`, which is the desired default. They remain a dormant advanced escape hatch. The UTF-8 encoding fix on those subprocess calls stays (still correct).
 - **Remove** Path A only: `scripts/cbv/llm_invoke.py` and `bootstrap.default_llm_env`.
-- **Keep** `llm-payload` and `apply-llm-artifacts` CLI verbs — they are the `architecture-codebase` skill's backend.
+- **Keep** `llm-payload` and `apply-llm-artifacts` CLI verbs — they are the `codebase-architecture` skill's backend.
 - **Keep** the `llm_artifacts_pending` field in the `vectorize` summary — with no auto-LLM it now reliably signals "LLM artifacts are still deterministic placeholders."
 
 ---
@@ -40,12 +40,12 @@ scripts/
     └── llm_invoke.py             DELETED (Path A bridge)
 
 skills/
-├── vectorize-repo/SKILL.md       MODIFIED: drop "Step 3", point to architecture-codebase
+├── codebase-vectorize/SKILL.md       MODIFIED: drop "Step 3", point to codebase-architecture
 ├── codebase-query/               DELETED
 ├── codebase-relate/              DELETED
 ├── codebase-identify/SKILL.md    NEW: location lookups (fast lane)
 ├── codebase-ask/SKILL.md         NEW: understanding + relationship questions
-└── architecture-codebase/SKILL.md NEW: optional LLM artifact generation
+└── codebase-architecture/SKILL.md NEW: optional LLM artifact generation
 
 tests/unit/
 ├── test_llm_invoke.py            DELETED
@@ -101,21 +101,21 @@ Front-matter `name: codebase-ask`. Description triggering-focused: "how does X w
 - [ ] **Step 1: Write `skills/codebase-ask/SKILL.md`** (full content in appendix).
 - [ ] **Step 2: Verify** front-matter parses.
 
-### Task 5: `architecture-codebase` — optional LLM artifacts
+### Task 5: `codebase-architecture` — optional LLM artifacts
 
-**Files:** Create `skills/architecture-codebase/SKILL.md`.
+**Files:** Create `skills/codebase-architecture/SKILL.md`.
 
-Front-matter `name: architecture-codebase`. Description: generate/regenerate LLM-written cluster labels + `ARCHITECTURE.md`; note it is optional and the only LLM-using skill. Body: the workflow — `cbv llm-payload <repo>` -> agent writes labels + markdown -> `cbv apply-llm-artifacts <repo> <result.json>` — with exact payload and result JSON shapes.
+Front-matter `name: codebase-architecture`. Description: generate/regenerate LLM-written cluster labels + `ARCHITECTURE.md`; note it is optional and the only LLM-using skill. Body: the workflow — `cbv llm-payload <repo>` -> agent writes labels + markdown -> `cbv apply-llm-artifacts <repo> <result.json>` — with exact payload and result JSON shapes.
 
-- [ ] **Step 1: Write `skills/architecture-codebase/SKILL.md`** (full content in appendix).
+- [ ] **Step 1: Write `skills/codebase-architecture/SKILL.md`** (full content in appendix).
 - [ ] **Step 2: Verify** front-matter parses.
 
-### Task 6: Trim `vectorize-repo`
+### Task 6: Trim `codebase-vectorize`
 
-**Files:** Modify `skills/vectorize-repo/SKILL.md`.
+**Files:** Modify `skills/codebase-vectorize/SKILL.md`.
 
 - [ ] **Step 1:** Delete the "Step 3 — Finalize LLM artifacts" section.
-- [ ] **Step 2:** Replace the LLM note so it states: cluster labels and `ARCHITECTURE.md` are written as deterministic placeholders; to get real LLM-written ones, use the `architecture-codebase` skill. Keep `"llm_artifacts_pending"` in the summary example.
+- [ ] **Step 2:** Replace the LLM note so it states: cluster labels and `ARCHITECTURE.md` are written as deterministic placeholders; to get real LLM-written ones, use the `codebase-architecture` skill. Keep `"llm_artifacts_pending"` in the summary example.
 - [ ] **Step 3:** Grep the file for stale references to `codebase-query` and update to `codebase-identify` / `codebase-ask`.
 
 ---

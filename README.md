@@ -55,10 +55,10 @@ just say what you want, and the matching skill triggers. There are four.
 
 | Skill | You want to… | Example phrasing |
 |---|---|---|
-| **`vectorize-repo`** | Build the index for a repo | "index https://github.com/x/y", "vectorize this repo" |
+| **`codebase-vectorize`** | Build the index for a repo | "index https://github.com/x/y", "vectorize this repo" |
 | **`codebase-identify`** | Find *where* a known thing is | "where is `processPayment` defined in `x`" |
 | **`codebase-ask`** | *Understand* something or see how things relate | "how does auth work in `x`", "who calls `save`" |
-| **`architecture-codebase`** | Get an LLM-written orientation doc (optional) | "write the architecture doc for `x`" |
+| **`codebase-architecture`** | Get an LLM-written orientation doc (optional) | "write the architecture doc for `x`" |
 
 **`codebase-identify` vs `codebase-ask`** is the only split that needs
 explaining. `identify` answers "where is it" — it returns file and line numbers,
@@ -68,8 +68,8 @@ graph. If you invoke the wrong one, the skill notices and hands off, telling you
 it's doing so ("This only needs a location — using `codebase-identify`
 instead…"). You can also always invoke a skill explicitly.
 
-`architecture-codebase` is **optional and the only skill that uses an LLM**. The
-index itself is built with zero LLM involvement; `architecture-codebase` just
+`codebase-architecture` is **optional and the only skill that uses an LLM**. The
+index itself is built with zero LLM involvement; `codebase-architecture` just
 writes the human-readable cluster labels and `ARCHITECTURE.md` summary on
 demand.
 
@@ -78,28 +78,28 @@ demand.
 ## The workflow
 
 ```
-1. vectorize-repo          ← build the index. ONCE per repo. (Slow: minutes.)
+1. codebase-vectorize          ← build the index. ONCE per repo. (Slow: minutes.)
         │
         ├─ 2a. codebase-ask        ← ask anything, any time, any order.
         ├─ 2b. codebase-identify   ← fast "where is X" lookups.
         │
-        └─ 3. architecture-codebase  ← OPTIONAL. Pretty labels + ARCHITECTURE.md.
+        └─ 3. codebase-architecture  ← OPTIONAL. Pretty labels + ARCHITECTURE.md.
 ```
 
-`vectorize-repo` is the only build step. It produces the **complete** index —
+`codebase-vectorize` is the only build step. It produces the **complete** index —
 chunks, search indexes, the symbol graph, the flow graph, clusters, importance
 scores — all of it, in one pass. `codebase-ask` and `codebase-identify` only
 *read* that finished index; they never build anything, and neither has to run
 before the other. It is build-once, read-many.
 
-Re-running `vectorize-repo` on a repo that's already indexed does an
+Re-running `codebase-vectorize` on a repo that's already indexed does an
 **incremental update** — it re-processes only the files that changed.
 
 ---
 
 ## How indexing works
 
-When `vectorize-repo` runs, the pipeline does this:
+When `codebase-vectorize` runs, the pipeline does this:
 
 1. **Resolve** — clone the URL (or copy the local folder) into the plugin's data
    directory.
@@ -124,7 +124,7 @@ When `vectorize-repo` runs, the pipeline does this:
 9. **Score importance** — run PageRank over the symbol graph so the most central
    code can be ranked first.
 10. **Write artifacts** — `manifest.json`, and a placeholder `ARCHITECTURE.md`
-    (the `architecture-codebase` skill upgrades this later).
+    (the `codebase-architecture` skill upgrades this later).
 
 The result is one `index.sqlite` per repo. It is portable — copy it to another
 machine and it still works.
@@ -209,7 +209,7 @@ an explicit non-goal.
 - Incremental updates — re-indexing after small changes is fast.
 
 **You don't get (be aware):**
-- **Instant first run.** The first `vectorize-repo` builds a ~4 GB environment
+- **Instant first run.** The first `codebase-vectorize` builds a ~4 GB environment
   and downloads a model — 5–15 minutes. Amortized after that.
 - **Verified retrieval accuracy.** The engine is correctness-tested (test suite
   passes), but its *answer quality* on real repos has not yet been benchmarked.
@@ -249,7 +249,7 @@ run.sh stats <repo> [--top-k N]       Index counts, cluster labels, top nodes.
 run.sh bench <repo>                   Run retrieval benchmarks (needs eval data).
 run.sh list                           List every indexed repo.
 run.sh info                           Print data-dir and environment paths.
-run.sh llm-payload <repo>             Emit the input for architecture-codebase.
+run.sh llm-payload <repo>             Emit the input for codebase-architecture.
 run.sh apply-llm-artifacts <repo> <result.json>
                                       Write LLM-generated labels + ARCHITECTURE.md.
 ```
@@ -275,7 +275,7 @@ bash scripts/run.sh stats Archon
 ```
 
 `llm-payload` and `apply-llm-artifacts` are normally driven by the
-`architecture-codebase` skill, not run by hand.
+`codebase-architecture` skill, not run by hand.
 
 ---
 
@@ -293,7 +293,7 @@ ${CLAUDE_PLUGIN_DATA}/
         ├── source/          the cloned/copied repo
         ├── index.sqlite     the index — all layers in one file
         ├── manifest.json
-        ├── ARCHITECTURE.md  placeholder until architecture-codebase runs
+        ├── ARCHITECTURE.md  placeholder until codebase-architecture runs
         └── bench/results.json
 ```
 
@@ -313,9 +313,9 @@ data falls back to `~/.local/share/codebase-vectorizer/` (POSIX) or
   coverage.
 - **Clusters need a sizeable repo** — tiny repos produce none, which is correct.
 - **Indexes from v0.3.0 are not auto-upgraded** — querying one returns a clean
-  "legacy schema" error; re-run `vectorize-repo` to rebuild.
+  "legacy schema" error; re-run `codebase-vectorize` to rebuild.
 - The LLM artifacts (cluster labels, `ARCHITECTURE.md`) are deterministic
-  placeholders until you run `architecture-codebase`.
+  placeholders until you run `codebase-architecture`.
 
 ---
 

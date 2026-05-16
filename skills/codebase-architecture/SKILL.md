@@ -1,19 +1,19 @@
 ---
-name: architecture-codebase
+name: codebase-architecture
 description: >
   Generate the LLM-written orientation artifacts for an already-indexed
   codebase — real concept-cluster labels and a prose ARCHITECTURE.md map — to
-  replace the deterministic placeholders that vectorize-repo writes. Use this
+  replace the deterministic placeholders that codebase-vectorize writes. Use this
   when the user asks to "write the architecture doc for <repo>", "generate
   ARCHITECTURE.md", "label the concept clusters", "give me an orientation map
   of <repo>", or wants a readable high-level summary of an indexed codebase.
-  This is the only skill that uses an LLM, and it is optional — vectorize-repo,
+  This is the only skill that uses an LLM, and it is optional — codebase-vectorize,
   codebase-ask, and codebase-identify all work fully without it.
 metadata:
   version: "1.0.0"
 ---
 
-# Architecture Codebase
+# Codebase Architecture
 
 Write the human-readable orientation artifacts for an indexed repository: a
 short label and summary for each concept cluster, and an `ARCHITECTURE.md`
@@ -21,7 +21,7 @@ orientation map.
 
 ## Why this is its own skill
 
-Indexing (`vectorize-repo`) is pure computation — chunking, embeddings, the
+Indexing (`codebase-vectorize`) is pure computation — chunking, embeddings, the
 symbol and flow graphs, clustering, PageRank — and needs no LLM. Only two
 artifacts are prose: the **concept-cluster labels** and **`ARCHITECTURE.md`**.
 `vectorize` writes deterministic placeholders for both (labels like
@@ -42,8 +42,8 @@ The user names the repo. If unclear, run `list`:
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" list
 ```
 
-If the repo is not indexed, it must be built first with `vectorize-repo` — say
-so and stop.
+If the repo is not indexed, it must be built first with `codebase-vectorize` —
+say so and stop.
 
 ## Step 2 — Get the payload
 

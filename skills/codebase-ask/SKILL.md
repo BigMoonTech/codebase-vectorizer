@@ -17,7 +17,7 @@ metadata:
 # Codebase Ask
 
 Answer real questions about an indexed repository by querying the index — the
-semantic search, the symbol graph, and the flow graph that `vectorize-repo`
+semantic search, the symbol graph, and the flow graph that `codebase-vectorize`
 already built — instead of re-reading the whole codebase.
 
 ## Scope check — do this first
@@ -49,7 +49,7 @@ the verb. Use this table.
 
 The user names the repo. If unclear, run `list` (see `codebase-identify` for the
 exact launcher line). If nothing is indexed, the repo must be built first with
-`vectorize-repo` — say so and stop.
+`codebase-vectorize` — say so and stop.
 
 ## Step 2 — Pick the verb for the question
 

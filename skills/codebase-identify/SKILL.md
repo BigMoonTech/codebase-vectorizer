@@ -49,7 +49,7 @@ indexed repo they mean, list what is indexed:
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" list
 ```
 
-If nothing is indexed, the repo must be built first with the `vectorize-repo`
+If nothing is indexed, the repo must be built first with the `codebase-vectorize`
 skill — say so and stop.
 
 ## Step 2 — Run the fast-lane lookup
