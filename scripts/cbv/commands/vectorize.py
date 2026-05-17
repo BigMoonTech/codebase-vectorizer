@@ -50,6 +50,7 @@ FLOW_EDGE_WEIGHTS = {
     "dataflow": 0.7,
     "guards": 0.3,
 }
+CLUSTER_CATEGORIES = {"source", "config"}
 
 
 def run(ns: argparse.Namespace) -> int:
@@ -901,23 +902,34 @@ def _build_concept_cluster_plan(
             "concept clustering failed: embedding count did not match planned chunks"
         )
         return None
+
+    code_positions = [
+        i for i, c in enumerate(chunks_buf) if c.category in CLUSTER_CATEGORIES
+    ]
+    if not code_positions:
+        return [], []
+
     try:
-        result = clusters.cluster_embeddings(embeddings)
+        result = clusters.cluster_embeddings(embeddings[code_positions])
     except Exception as e:
         warnings.append(f"concept clustering failed: {e}")
         return None
+    # Map global chunk position -> local index within the filtered subset,
+    # so membership scores (indexed locally) can be looked up by global position.
+    global_to_local = {global_i: local_i for local_i, global_i in enumerate(code_positions)}
     grouped: dict[int, list[int]] = {}
-    for idx, label in enumerate(result.labels):
-        membership = result.memberships[idx]
+    for local_idx, label in enumerate(result.labels):
+        membership = result.memberships[local_idx]
         if label < 0 or membership <= 0.1:
             continue
-        grouped.setdefault(label, []).append(idx)
+        global_idx = code_positions[local_idx]
+        grouped.setdefault(label, []).append(global_idx)
 
     labeler = clusters.LocalLLMClusterLabeler()
     cluster_rows: list[tuple[int, str, str, bytes, int]] = []
     member_rows: list[tuple[int, int, float]] = []
     for cluster_id, positions in sorted(grouped.items()):
-        positions.sort(key=lambda idx: result.memberships[idx], reverse=True)
+        positions.sort(key=lambda idx: result.memberships[global_to_local[idx]], reverse=True)
         samples = [chunks_buf[idx].content for idx in positions[:5]]
         label, summary, warning = clusters.label_cluster(samples, labeler)
         if warning is not None:
@@ -931,7 +943,7 @@ def _build_concept_cluster_plan(
             (int(cluster_id), label, summary, centroid.astype("float32").tobytes(), len(positions))
         )
         member_rows.extend(
-            (idx, int(cluster_id), float(result.memberships[idx]))
+            (idx, int(cluster_id), float(result.memberships[global_to_local[idx]]))
             for idx in positions
         )
     return cluster_rows, member_rows

@@ -395,6 +395,47 @@ def test_vectorize_no_cache_does_not_create_embedding_cache(tmp_home, source_rep
     assert manifest["embedding_cache_hit_rate"] == 0.0
 
 
+def test_concept_cluster_plan_ignores_non_code_chunks(monkeypatch):
+    import numpy as np
+    from cbv import chunker, clusters
+    from cbv.commands import vectorize as vec
+
+    def mk(cat):
+        return chunker.Chunk(
+            file_path=f"{cat}.x", language="python", kind="window", name=None,
+            ast_path=None, start_line=1, end_line=1, start_byte=0, end_byte=1,
+            content=cat, content_hash=cat, token_count=1, category=cat,
+        )
+
+    chunks = [mk("source")] * 6 + [mk("docs")] * 6
+    embeddings = np.vstack([
+        np.ones((6, 8), dtype="float32"),
+        np.zeros((6, 8), dtype="float32"),
+    ])
+
+    # Monkeypatch cluster_embeddings so it returns label 0 + membership 1.0 for
+    # every position it receives — regardless of the actual embeddings.  Without
+    # the code_positions filter the call receives all 12 positions, so docs
+    # positions 6-11 would appear in member_rows and the assertion would fail.
+    def fake_cluster(emb, **kwargs):
+        n = len(emb)
+        return clusters.ClusterResult(
+            labels=[0] * n,
+            memberships=[1.0] * n,
+            reduced=emb,
+        )
+
+    monkeypatch.setattr(vec.clusters, "cluster_embeddings", fake_cluster)
+
+    warnings: list[str] = []
+    plan = vec._build_concept_cluster_plan(chunks, embeddings, warnings)
+    assert plan is not None
+    cluster_rows, member_rows = plan
+    # Only the 6 source-chunk positions (0..5) may appear as cluster members.
+    member_positions = {pos for pos, _, _ in member_rows}
+    assert member_positions <= set(range(6))
+
+
 def test_vectorize_replaces_wrong_length_cached_embedding(
     tmp_home,
     source_repo,
