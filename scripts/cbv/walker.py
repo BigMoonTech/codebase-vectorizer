@@ -15,6 +15,8 @@ from typing import Iterator, Optional
 
 import pathspec
 
+from cbv import classify as _classify
+
 BINARY_SNIFF_BYTES = 8192
 
 
@@ -23,6 +25,7 @@ class WalkEntry:
     abspath: Path
     relpath: Path
     size_bytes: int
+    category: str
 
 
 def _load_root_gitignore(root: Path) -> Optional[pathspec.PathSpec]:
@@ -64,4 +67,4 @@ def walk(root: Path, max_file_mb: float = 1.5) -> Iterator[WalkEntry]:
             continue
         if _looks_binary(p):
             continue
-        yield WalkEntry(abspath=p, relpath=rel, size_bytes=size)
+        yield WalkEntry(abspath=p, relpath=rel, size_bytes=size, category=_classify.classify(rel_posix))

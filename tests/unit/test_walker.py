@@ -91,3 +91,17 @@ def test_walker_nested_gitignore_not_supported_warns(tmp_path):
     entries = sorted(e.relpath.as_posix() for e in walker.walk(tmp_path, max_file_mb=1.5))
     # x.py IS yielded — nested .gitignore is not respected in Slice 1.
     assert "sub/x.py" in entries
+
+
+def test_walk_entries_carry_a_file_category(tmp_path):
+    from cbv import walker
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("# guide\n", encoding="utf-8")
+
+    by_rel = {e.relpath.as_posix(): e for e in walker.walk(tmp_path)}
+
+    assert by_rel["scripts/app.py"].category == "source"
+    assert by_rel["docs/guide.md"].category == "docs"
