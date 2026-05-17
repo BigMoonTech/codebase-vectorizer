@@ -415,3 +415,19 @@ def test_query_symbol_token_strips_trailing_punctuation():
     assert _query_symbol_token("where is cluster_embeddings,") == "cluster_embeddings"
     assert _query_symbol_token("find Foo") == "Foo"
     assert _query_symbol_token("") == ""
+
+
+def test_rrf_applies_per_ranking_weights():
+    from cbv.commands.query import _rrf
+
+    # Two rankings, each with one unique chunk at rank 1. Equal weights -> tie.
+    equal = _rrf([{1: 9.0}, {2: 9.0}], k=60, source_names=["a", "b"])
+    assert {cid for cid, _, _ in equal} == {1, 2}
+    assert equal[0][1] == equal[1][1]
+
+    # Down-weighting the second ranking puts chunk 1 strictly ahead.
+    weighted = _rrf(
+        [{1: 9.0}, {2: 9.0}], k=60, source_names=["a", "b"], weights=[1.0, 0.1]
+    )
+    assert weighted[0][0] == 1
+    assert weighted[0][1] > weighted[1][1]

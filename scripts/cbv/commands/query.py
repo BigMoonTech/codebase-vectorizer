@@ -324,22 +324,32 @@ def _rrf(
     *,
     k: int,
     source_names: list[str] | None = None,
+    weights: list[float] | None = None,
 ) -> List[tuple]:
-    """Reciprocal Rank Fusion. Sources is a tag list per chunk for debug."""
+    """Reciprocal Rank Fusion with optional per-ranking weights.
+
+    `weights[i]` multiplies every RRF contribution from `rankings[i]`; it
+    defaults to 1.0 for every ranking (classic RRF). `sources` is a tag list
+    per chunk for debug output.
+    """
     if source_names is None:
         source_names = [f"source_{idx}" for idx in range(len(rankings))]
     if len(source_names) != len(rankings):
         raise ValueError("source_names length must match rankings length")
+    if weights is None:
+        weights = [1.0] * len(rankings)
+    if len(weights) != len(rankings):
+        raise ValueError("weights length must match rankings length")
 
     aggregate: Dict[int, float] = {}
     sources: Dict[int, list] = {}
-    for tag, ranking in zip(source_names, rankings):
+    for tag, ranking, weight in zip(source_names, rankings, weights):
         if tag == "bm25":
             sorted_ids = [cid for cid, _ in sorted(ranking.items(), key=lambda kv: kv[1])]
         else:
             sorted_ids = [cid for cid, _ in sorted(ranking.items(), key=lambda kv: -kv[1])]
         for rank, cid in enumerate(sorted_ids, start=1):
-            aggregate[cid] = aggregate.get(cid, 0.0) + 1.0 / (k + rank)
+            aggregate[cid] = aggregate.get(cid, 0.0) + weight * (1.0 / (k + rank))
             sources.setdefault(cid, []).append(tag)
     fused = sorted(
         ((cid, score, sources[cid]) for cid, score in aggregate.items()),
