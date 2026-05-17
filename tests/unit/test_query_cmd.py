@@ -406,3 +406,12 @@ def _insert_node(conn, *, node_id: int, kind: str, chunk_id: int):
         "INSERT INTO nodes (id, kind, chunk_id) VALUES (?, ?, ?)",
         (node_id, kind, chunk_id),
     )
+
+
+def test_query_symbol_token_strips_trailing_punctuation():
+    from cbv.commands.query import _query_symbol_token
+
+    assert _query_symbol_token("how does the codebase call UMAP?") == "UMAP"
+    assert _query_symbol_token("where is cluster_embeddings,") == "cluster_embeddings"
+    assert _query_symbol_token("find Foo") == "Foo"
+    assert _query_symbol_token("") == ""

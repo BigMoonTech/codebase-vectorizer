@@ -271,7 +271,9 @@ def _refined_queries(query: str, rows: list[dict]) -> list[str]:
 
 def _query_symbol_token(query: str) -> str:
     parts = query.strip().split()
-    return parts[-1] if parts else ""
+    if not parts:
+        return ""
+    return parts[-1].strip(".,:;()[]{}<>!?\"'`")
 
 
 def _rrf(
