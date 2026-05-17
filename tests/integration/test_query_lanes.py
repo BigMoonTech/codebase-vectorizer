@@ -180,7 +180,12 @@ def test_full_lane_keeps_a_source_chunk_above_a_swarm_of_docs(tmp_path, monkeypa
 
     ns = argparse.Namespace(
         repo="polltest", question="how does the codebase call umap",
-        lane="full", top_k=10,
+        # top_k=100 returns the whole 61-chunk candidate pool. Task 9 is a
+        # pool-composition fix, so this test verifies pool membership. The stub
+        # reranker scores by naive lexical overlap and would rank the docs
+        # swarm above the source chunk; a smaller top_k would truncate the
+        # source away and mask whether tiering put it in the pool at all.
+        lane="full", top_k=100,
     )
     buf = io.StringIO()
     old = sys.stdout
