@@ -206,7 +206,9 @@ def _dense(conn, q_int8: np.ndarray, *, limit: int, categories: set[str] | None 
 
     sqlite-vec 0.1.x KNN cannot filter on a joined column, so when a category
     filter is set we over-fetch k = limit * _DENSE_OVERFETCH nearest, then
-    filter and truncate in Python.
+    filter and truncate in Python. When a category filter is set the result
+    may contain fewer than `limit` hits if the requested categories are rarer
+    than roughly 1-in-`_DENSE_OVERFETCH` of the nearest-neighbour window.
 
     Inverts distance so 'higher is better' is consistent with BM25 ordering
     (where smaller bm25 = better). The RRF fuse normalizes via rank order
@@ -219,7 +221,6 @@ def _dense(conn, q_int8: np.ndarray, *, limit: int, categories: set[str] | None 
     if categories:
         rows = conn.execute(
             "SELECT v.chunk_id, v.distance FROM vec_chunks v "
-            "JOIN chunks c ON c.id = v.chunk_id "
             "WHERE v.embedding MATCH vec_int8(?) AND v.k = ? "
             "ORDER BY v.distance",
             (qparam, limit * _DENSE_OVERFETCH),
