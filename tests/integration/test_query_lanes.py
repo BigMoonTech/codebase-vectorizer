@@ -235,10 +235,50 @@ def test_symbol_exact_excludes_vendor_chunks(tmp_path, monkeypatch):
             )
         conn.commit()
 
-        result = Q._symbol_exact(conn, "explain Thesymbol", limit=50)
+        result = Q._symbol_exact(
+            conn, "explain Thesymbol", limit=50,
+            categories=Q.RETRIEVABLE_CATEGORIES,
+        )
         # source chunk (id=1) must be present; vendor chunk (id=2) must be absent.
         assert 1 in result, "source chunk must be returned by _symbol_exact"
         assert 2 not in result, "vendor chunk must NOT be returned by _symbol_exact"
+    finally:
+        conn.close()
+
+
+def test_symbol_exact_without_categories_does_not_filter(tmp_path, monkeypatch):
+    """_symbol_exact without `categories` (the fast-lane default) must NOT
+    filter — meta/vendor chunks are returned. This locks in the fast-lane
+    behavior so the full-lane scoping can't be silently re-broken."""
+    from cbv import db
+    from cbv.commands import query as Q
+
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    conn = db.open_db(tmp_path / "index.sqlite")
+    try:
+        db.init_schema(conn)
+        for cid, (fp, cat) in enumerate(
+            [("src/thesymbol.py", "source"), ("vendor/thesymbol.py", "vendor")], start=1
+        ):
+            conn.execute(
+                "INSERT INTO chunks (id, file_path, language, kind, name, "
+                "ast_path, start_line, end_line, start_byte, end_byte, content, "
+                "content_hash, token_count, category) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, fp, "python", "function", "Thesymbol", None, 1, 10, 0, 100,
+                 "def Thesymbol(): pass", f"h{cid}", 4, cat),
+            )
+            conn.execute(
+                "INSERT INTO nodes (id, kind, name, short_name, file_path, "
+                "start_line, end_line, chunk_id) VALUES (?,?,?,?,?,?,?,?)",
+                (cid, "function", "Thesymbol", "Thesymbol", fp, 1, 10, cid),
+            )
+        conn.commit()
+
+        result = Q._symbol_exact(conn, "explain Thesymbol", limit=50)
+        # No category filter -> both source and vendor chunks are returned.
+        assert 1 in result, "source chunk must be returned"
+        assert 2 in result, "vendor chunk must be returned when no category filter is set"
     finally:
         conn.close()
 

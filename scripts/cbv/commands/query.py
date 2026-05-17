@@ -81,12 +81,15 @@ def run(ns: argparse.Namespace) -> int:
             qv = emb.embed([ns.question])[0]
             q_int8 = quantize.quantize_int8(qv.reshape(1, -1))[0]
             dense_primary = _dense(conn, q_int8, limit=50, categories=PRIMARY_CATEGORIES)
-            sym_hits = _symbol_exact(conn, ns.question, limit=50)
+            sym_hits = _symbol_exact(
+                conn, ns.question, limit=50, categories=RETRIEVABLE_CATEGORIES
+            )
 
             # Context tier: tests + docs, smaller budget, demoted in fusion.
-            # Every lane restricts to RETRIEVABLE_CATEGORIES: bm25/dense via
-            # their `categories` arg, symbol/graph inside their helpers, so
-            # meta/vendor chunks never enter the candidate pool.
+            # Every full-lane lane restricts to RETRIEVABLE_CATEGORIES: bm25/dense
+            # via their `categories` arg, symbol via its `categories` arg, graph
+            # inside _graph_expand, so meta/vendor chunks never enter the
+            # candidate pool.
             bm25_context = _bm25(conn, ns.question, limit=20, categories=CONTEXT_CATEGORIES)
             dense_context = _dense(conn, q_int8, limit=20, categories=CONTEXT_CATEGORIES)
 
@@ -265,19 +268,36 @@ def _dense(conn, q_int8: np.ndarray, *, limit: int, categories: set[str] | None 
     return {int(r[0]): -float(r[1]) for r in rows}
 
 
-def _symbol_exact(conn, query: str, *, limit: int) -> dict[int, float]:
+def _symbol_exact(
+    conn, query: str, *, limit: int, categories: set[str] | None = None
+) -> dict[int, float]:
+    """Return {chunk_id: rank-score} for exact symbol-name matches, optionally
+    restricted to the given file categories.
+
+    The fast lane calls this without `categories` (unfiltered, original
+    behavior); the full lane passes `categories` so meta/vendor chunks cannot
+    enter its candidate pool.
+    """
     q = _query_symbol_token(query)
     if not q:
         return {}
-    cat_ph = ",".join("?" for _ in RETRIEVABLE_CATEGORIES)
-    rows = conn.execute(
-        "SELECT DISTINCT nodes.chunk_id FROM nodes "
-        "JOIN chunks ON chunks.id = nodes.chunk_id "
-        "WHERE nodes.chunk_id IS NOT NULL AND nodes.kind != 'block' "
-        "AND (nodes.short_name = ? OR nodes.name = ?) "
-        f"AND chunks.category IN ({cat_ph}) LIMIT ?",
-        (q, q, *sorted(RETRIEVABLE_CATEGORIES), limit),
-    ).fetchall()
+    if categories:
+        cat_ph = ",".join("?" for _ in categories)
+        rows = conn.execute(
+            "SELECT DISTINCT nodes.chunk_id FROM nodes "
+            "JOIN chunks ON chunks.id = nodes.chunk_id "
+            "WHERE nodes.chunk_id IS NOT NULL AND nodes.kind != 'block' "
+            "AND (nodes.short_name = ? OR nodes.name = ?) "
+            f"AND chunks.category IN ({cat_ph}) LIMIT ?",
+            (q, q, *sorted(categories), limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT chunk_id FROM nodes "
+            "WHERE chunk_id IS NOT NULL AND kind != 'block' "
+            "AND (short_name = ? OR name = ?) LIMIT ?",
+            (q, q, limit),
+        ).fetchall()
     return {int(row[0]): float(limit - idx) for idx, row in enumerate(rows)}
 
 
