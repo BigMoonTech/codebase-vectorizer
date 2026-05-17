@@ -78,6 +78,7 @@ class Chunk:
     content: str
     content_hash: str
     token_count: int
+    category: str = "source"
 
 
 def detect_language(path: Path) -> str:

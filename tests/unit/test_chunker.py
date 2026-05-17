@@ -250,3 +250,21 @@ def test_chunk_file_unknown_extension_falls_back(tmp_path):
     assert all(c.kind == "window" for c in chunks)
     assert all(c.ast_path is None for c in chunks)
     assert all(c.name is None for c in chunks)
+
+
+def test_chunk_has_a_category_field_defaulting_to_source():
+    from cbv.chunker import Chunk
+
+    c = Chunk(
+        file_path="a.py", language="python", kind="window", name=None,
+        ast_path=None, start_line=1, end_line=1, start_byte=0, end_byte=1,
+        content="x", content_hash="h", token_count=1,
+    )
+    assert c.category == "source"
+
+    c2 = Chunk(
+        file_path="a.py", language="python", kind="window", name=None,
+        ast_path=None, start_line=1, end_line=1, start_byte=0, end_byte=1,
+        content="x", content_hash="h", token_count=1, category="docs",
+    )
+    assert c2.category == "docs"
