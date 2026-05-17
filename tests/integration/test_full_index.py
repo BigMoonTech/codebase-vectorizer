@@ -190,3 +190,32 @@ def test_query_result_line_ranges_valid(indexed, capsys):
         assert f.exists(), f"{f} not found"
         lines = f.read_text(encoding="utf-8").splitlines()
         assert 1 <= r["start_line"] <= r["end_line"] <= len(lines)
+
+
+def test_indexed_chunks_carry_their_file_category(tmp_path, monkeypatch):
+    """Chunks from a docs file are stored with category='docs', code with 'source'."""
+    import sqlite3
+    from cbv.commands import vectorize as vec
+    from cbv import cli
+
+    src = tmp_path / "repo"
+    (src / "pkg").mkdir(parents=True)
+    (src / "pkg" / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    (src / "README.md").write_text("# project\n\nsome prose here\n", encoding="utf-8")
+
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    out = tmp_path / "index"
+    ns = cli.build_parser().parse_args(
+        ["vectorize", str(src), "--output-dir", str(out)]
+    )
+    vec.run(ns)
+
+    conn = sqlite3.connect(out / "index.sqlite")
+    try:
+        cats = dict(conn.execute(
+            "SELECT file_path, category FROM chunks GROUP BY file_path"
+        ).fetchall())
+    finally:
+        conn.close()
+    assert cats["pkg/app.py"] == "source"
+    assert cats["README.md"] == "docs"

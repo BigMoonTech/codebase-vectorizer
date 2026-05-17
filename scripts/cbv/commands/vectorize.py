@@ -329,10 +329,10 @@ def run(ns: argparse.Namespace) -> int:
                 cur = conn.execute(
                     "INSERT INTO chunks (file_path, language, kind, name, ast_path, "
                     "start_line, end_line, start_byte, end_byte, content, "
-                    "content_hash, token_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "content_hash, token_count, category) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (c.file_path, c.language, c.kind, c.name, c.ast_path,
                      c.start_line, c.end_line, c.start_byte, c.end_byte,
-                     c.content, c.content_hash, c.token_count),
+                     c.content, c.content_hash, c.token_count, c.category),
                 )
                 inserted_chunk_ids.append(int(cur.lastrowid))
             assert len(inserted_chunk_ids) == len(chunks_buf)
@@ -520,6 +520,7 @@ def _chunk_selected_entries(
                     content=c.content,
                     content_hash=c.content_hash,
                     token_count=c.token_count,
+                    category=entry.category,
                 )
             )
     return chunks_buf, chunked_paths
@@ -637,7 +638,7 @@ def _load_chunks(conn) -> tuple[list[int], list[chunker.Chunk]]:
     rows = conn.execute(
         "SELECT id, file_path, language, kind, name, ast_path, "
         "start_line, end_line, start_byte, end_byte, content, "
-        "content_hash, token_count FROM chunks ORDER BY id"
+        "content_hash, token_count, category FROM chunks ORDER BY id"
     ).fetchall()
     chunk_ids = [int(row[0]) for row in rows]
     chunks = [
@@ -654,6 +655,7 @@ def _load_chunks(conn) -> tuple[list[int], list[chunker.Chunk]]:
             content=row[10],
             content_hash=row[11],
             token_count=row[12],
+            category=row[13],
         )
         for row in rows
     ]
@@ -1060,7 +1062,7 @@ def _write_meta(
     cluster_index_version,
 ):
     rows = [
-        ("schema_version", "1.0"),
+        ("schema_version", db.SCHEMA_VERSION),
         ("indexed_at", str(int(time.time()))),
         ("repo_origin", repo_origin),
         ("commit_sha", commit_sha or ""),
