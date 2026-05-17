@@ -295,7 +295,7 @@ def test_vectorize_writes_meta(tmp_home, source_repo):
     vec_cmd.run(ns)
     from cbv import db
     conn = db.open_db(paths.repo_dir("upstream") / "index.sqlite")
-    assert db.read_meta(conn, "schema_version") == "1.1"
+    assert db.read_meta(conn, "schema_version") == db.SCHEMA_VERSION
     assert db.read_meta(conn, "embedder_dim") == "1536"
     assert db.read_meta(conn, "embedder_model") == "stub://sha256"
     assert db.read_meta(conn, "embedder_quant") == "int8"
