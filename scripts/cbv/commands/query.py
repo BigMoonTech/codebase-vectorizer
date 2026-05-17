@@ -30,6 +30,7 @@ from cbv import db, embedder, graph, paths, quantize, query_router, reranker
 
 RRF_K = 60  # standard RRF damping constant
 GRAPH_EDGE_KINDS = ("calls", "imports", "inherits", "references")
+_DENSE_OVERFETCH = 6  # KNN over-fetch factor so category filtering still fills the limit
 
 
 def run(ns: argparse.Namespace) -> int:
@@ -168,13 +169,24 @@ def run(ns: argparse.Namespace) -> int:
         conn.close()
 
 
-def _bm25(conn, query: str, *, limit: int) -> Dict[int, float]:
-    """Return {chunk_id: bm25 rank-score} for top BM25 hits."""
-    rows = conn.execute(
-        "SELECT rowid, bm25(chunks_fts) FROM chunks_fts "
-        "WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?",
-        (_fts_escape(query), limit),
-    ).fetchall()
+def _bm25(conn, query: str, *, limit: int, categories: set[str] | None = None) -> Dict[int, float]:
+    """Return {chunk_id: bm25 rank-score} for top BM25 hits, optionally
+    restricted to the given file categories."""
+    if categories:
+        placeholders = ",".join("?" for _ in categories)
+        rows = conn.execute(
+            "SELECT chunks_fts.rowid, bm25(chunks_fts) FROM chunks_fts "
+            "JOIN chunks ON chunks.id = chunks_fts.rowid "
+            f"WHERE chunks_fts MATCH ? AND chunks.category IN ({placeholders}) "
+            "ORDER BY bm25(chunks_fts) LIMIT ?",
+            (_fts_escape(query), *sorted(categories), limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT rowid, bm25(chunks_fts) FROM chunks_fts "
+            "WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?",
+            (_fts_escape(query), limit),
+        ).fetchall()
     return {int(r[0]): float(r[1]) for r in rows}
 
 
@@ -188,8 +200,13 @@ def _fts_escape(query: str) -> str:
     return " OR ".join(quoted)
 
 
-def _dense(conn, q_int8: np.ndarray, *, limit: int) -> Dict[int, float]:
-    """Return {chunk_id: -distance} for top sqlite-vec KNN hits.
+def _dense(conn, q_int8: np.ndarray, *, limit: int, categories: set[str] | None = None) -> Dict[int, float]:
+    """Return {chunk_id: -distance} for top sqlite-vec KNN hits, optionally
+    restricted to the given file categories.
+
+    sqlite-vec 0.1.x KNN cannot filter on a joined column, so when a category
+    filter is set we over-fetch k = limit * _DENSE_OVERFETCH nearest, then
+    filter and truncate in Python.
 
     Inverts distance so 'higher is better' is consistent with BM25 ordering
     (where smaller bm25 = better). The RRF fuse normalizes via rank order
@@ -199,6 +216,31 @@ def _dense(conn, q_int8: np.ndarray, *, limit: int) -> Dict[int, float]:
     sqlite-vec 0.1.x rejects raw INT8 bytes (interpreted as float32).
     """
     qparam = db.vec_int8_param(q_int8)  # JSON string, NOT raw bytes
+    if categories:
+        rows = conn.execute(
+            "SELECT v.chunk_id, v.distance FROM vec_chunks v "
+            "JOIN chunks c ON c.id = v.chunk_id "
+            "WHERE v.embedding MATCH vec_int8(?) AND v.k = ? "
+            "ORDER BY v.distance",
+            (qparam, limit * _DENSE_OVERFETCH),
+        ).fetchall()
+        allowed = {
+            int(r[0])
+            for r in conn.execute(
+                "SELECT id FROM chunks WHERE category IN ("
+                + ",".join("?" for _ in categories)
+                + ")",
+                tuple(sorted(categories)),
+            )
+        }
+        out: Dict[int, float] = {}
+        for chunk_id, distance in rows:
+            cid = int(chunk_id)
+            if cid in allowed:
+                out[cid] = -float(distance)
+            if len(out) >= limit:
+                break
+        return out
     rows = conn.execute(
         "SELECT chunk_id, distance FROM vec_chunks "
         "WHERE embedding MATCH vec_int8(?) AND k = ? ORDER BY distance",

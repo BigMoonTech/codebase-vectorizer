@@ -135,3 +135,42 @@ def test_full_lane_ppr_uses_seed_plus_expansion_as_bounded_candidates(
     assert captured["seed"]
     assert captured["expansion"]
     assert set(captured["candidates"]) == set(captured["seed"]) | set(captured["expansion"])
+
+
+def test_bm25_and_dense_accept_a_category_filter(tmp_path, monkeypatch):
+    import numpy as np
+    from cbv import db, embedder, quantize
+    from cbv.commands import query as Q
+
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    conn = db.open_db(tmp_path / "index.sqlite")
+    try:
+        db.init_schema(conn)
+        # one 'source' chunk and one 'docs' chunk, both containing "alpha"
+        for cid, (fp, cat) in enumerate(
+            [("a.py", "source"), ("b.md", "docs")], start=1
+        ):
+            conn.execute(
+                "INSERT INTO chunks (id, file_path, language, kind, name, "
+                "ast_path, start_line, end_line, start_byte, end_byte, content, "
+                "content_hash, token_count, category) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, fp, "python", "window", None, None, 1, 1, 0, 5,
+                 "alpha", f"h{cid}", 1, cat),
+            )
+            emb = embedder.make_embedder()
+            q8 = quantize.quantize_int8(emb.embed(["alpha"])[0].reshape(1, -1))[0]
+            db.insert_embedding(conn, cid, q8)
+        conn.commit()
+
+        bm25_all = Q._bm25(conn, "alpha", limit=50)
+        bm25_src = Q._bm25(conn, "alpha", limit=50, categories={"source"})
+        assert set(bm25_all) == {1, 2}
+        assert set(bm25_src) == {1}
+
+        emb = embedder.make_embedder()
+        q8 = quantize.quantize_int8(emb.embed(["alpha"])[0].reshape(1, -1))[0]
+        dense_src = Q._dense(conn, q8, limit=50, categories={"source"})
+        assert set(dense_src) == {1}
+    finally:
+        conn.close()
