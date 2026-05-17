@@ -76,7 +76,7 @@ def test_chunks_columns_exact(conn):
     assert names == [
         "id", "file_path", "language", "kind", "name", "ast_path",
         "start_line", "end_line", "start_byte", "end_byte",
-        "content", "content_hash", "token_count",
+        "content", "content_hash", "token_count", "category",
     ]
 
 
@@ -101,7 +101,7 @@ def test_write_meta_overwrites(conn):
 def test_assert_schema_v1_accepts_matching(conn):
     if not HAVE_VEC:
         pytest.skip()
-    db.write_meta(conn, "schema_version", "1.0")
+    db.write_meta(conn, "schema_version", db.SCHEMA_VERSION)
     db.assert_schema_v1(conn)  # no raise
 
 
@@ -189,6 +189,24 @@ def test_insert_embedding_helper(conn):
         "SELECT chunk_id FROM vec_chunks WHERE chunk_id = ?", (chunk_id,)
     ).fetchall()
     assert rows == [(chunk_id,)]
+
+
+def test_chunks_table_has_a_category_column(tmp_path):
+    from cbv import db
+
+    conn = db.open_db(tmp_path / "index.sqlite")
+    try:
+        db.init_schema(conn)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+        assert "category" in cols
+    finally:
+        conn.close()
+
+
+def test_schema_version_is_bumped_to_1_1():
+    from cbv import db
+
+    assert db.SCHEMA_VERSION == "1.1"
 
 
 def test_vec_int8_param_returns_json_for_match_queries(conn):

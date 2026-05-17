@@ -29,7 +29,7 @@ class LegacySchemaError(RuntimeError):
     """
 
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 
 # --- DDL ---------------------------------------------------------------------
@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     end_byte INTEGER NOT NULL,
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL,
-    token_count INTEGER NOT NULL
+    token_count INTEGER NOT NULL,
+    category TEXT NOT NULL DEFAULT 'source'
 );
 """
 
@@ -56,6 +57,7 @@ DDL_CHUNKS_IDX = """
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_path);
 CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(content_hash);
 CREATE INDEX IF NOT EXISTS idx_chunks_kind ON chunks(kind);
+CREATE INDEX IF NOT EXISTS idx_chunks_category ON chunks(category);
 """
 
 # FTS5 with porter stemmer + unicode61 with code-friendly separator chars.
