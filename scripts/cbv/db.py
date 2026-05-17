@@ -5,7 +5,7 @@ specs/2026-05-14-codebase-vectorizer-v1.0-design.md § "Storage schema".
 
 This module:
   - opens a sqlite3 connection with the sqlite-vec extension loaded,
-  - creates the full v1.0 schema (all ten tables) in one transaction,
+  - creates the full schema (all ten tables) in one transaction,
   - exposes read/write helpers for the meta key/value store,
   - exposes assert_schema_v1() for the spec-mandated legacy detector.
 
@@ -23,7 +23,8 @@ import sqlite_vec
 
 
 class LegacySchemaError(RuntimeError):
-    """Raised when an index's meta.schema_version is missing or not '1.0'.
+    """Raised when an index's meta.schema_version is missing or does not
+    match the current schema version.
 
     Spec § "Detected legacy index handling".
     """
@@ -235,11 +236,12 @@ def write_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def assert_schema_v1(conn: sqlite3.Connection) -> None:
-    """Raise LegacySchemaError if the index isn't a v1.0 index.
+    """Raise LegacySchemaError if the index's schema version doesn't match
+    the current one.
 
     Two failure modes are treated identically:
       (a) the meta table doesn't exist (very old indexes)
-      (b) meta.schema_version != "1.0"
+      (b) meta.schema_version != SCHEMA_VERSION
     """
     has_meta = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
