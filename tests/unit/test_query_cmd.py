@@ -386,6 +386,11 @@ def test_graph_expand_ties_use_chunk_id_order_before_limit():
 def _graph_conn():
     conn = sqlite3.connect(":memory:")
     conn.execute(
+        "CREATE TABLE chunks ("
+        "id INTEGER PRIMARY KEY, "
+        "category TEXT NOT NULL DEFAULT 'source')"
+    )
+    conn.execute(
         "CREATE TABLE nodes ("
         "id INTEGER PRIMARY KEY, "
         "kind TEXT NOT NULL, "
@@ -402,6 +407,11 @@ def _graph_conn():
 
 
 def _insert_node(conn, *, node_id: int, kind: str, chunk_id: int):
+    # Ensure the corresponding chunks row exists (category defaults to 'source').
+    conn.execute(
+        "INSERT OR IGNORE INTO chunks (id) VALUES (?)",
+        (chunk_id,),
+    )
     conn.execute(
         "INSERT INTO nodes (id, kind, chunk_id) VALUES (?, ?, ?)",
         (node_id, kind, chunk_id),

@@ -206,6 +206,92 @@ def test_full_lane_keeps_a_source_chunk_above_a_swarm_of_docs(tmp_path, monkeypa
     assert "src/clusters.py" in files
 
 
+def test_symbol_exact_excludes_vendor_chunks(tmp_path, monkeypatch):
+    """_symbol_exact must not return chunks whose category is 'vendor'."""
+    from cbv import db
+    from cbv.commands import query as Q
+
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    conn = db.open_db(tmp_path / "index.sqlite")
+    try:
+        db.init_schema(conn)
+        # Two chunks — one 'source', one 'vendor' — both linked to the same symbol name.
+        for cid, (fp, cat) in enumerate(
+            [("src/thesymbol.py", "source"), ("vendor/thesymbol.py", "vendor")], start=1
+        ):
+            conn.execute(
+                "INSERT INTO chunks (id, file_path, language, kind, name, "
+                "ast_path, start_line, end_line, start_byte, end_byte, content, "
+                "content_hash, token_count, category) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, fp, "python", "function", "Thesymbol", None, 1, 10, 0, 100,
+                 "def Thesymbol(): pass", f"h{cid}", 4, cat),
+            )
+            # Insert a node for each chunk with matching name/short_name.
+            conn.execute(
+                "INSERT INTO nodes (id, kind, name, short_name, file_path, "
+                "start_line, end_line, chunk_id) VALUES (?,?,?,?,?,?,?,?)",
+                (cid, "function", "Thesymbol", "Thesymbol", fp, 1, 10, cid),
+            )
+        conn.commit()
+
+        result = Q._symbol_exact(conn, "explain Thesymbol", limit=50)
+        # source chunk (id=1) must be present; vendor chunk (id=2) must be absent.
+        assert 1 in result, "source chunk must be returned by _symbol_exact"
+        assert 2 not in result, "vendor chunk must NOT be returned by _symbol_exact"
+    finally:
+        conn.close()
+
+
+def test_graph_expand_excludes_meta_chunks(tmp_path, monkeypatch):
+    """_graph_expand must not return neighbor chunks whose category is 'meta'."""
+    from cbv import db
+    from cbv.commands import query as Q
+
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    conn = db.open_db(tmp_path / "index.sqlite")
+    try:
+        db.init_schema(conn)
+        # Three chunks: seed (source), meta neighbor, source neighbor.
+        chunk_data = [
+            (1, "src/seed.py", "source"),
+            (2, ".claude/meta_thing.md", "meta"),
+            (3, "src/neighbor.py", "source"),
+        ]
+        for cid, fp, cat in chunk_data:
+            conn.execute(
+                "INSERT INTO chunks (id, file_path, language, kind, name, "
+                "ast_path, start_line, end_line, start_byte, end_byte, content, "
+                "content_hash, token_count, category) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, fp, "python", "function", f"sym{cid}", None, 1, 10, 0, 100,
+                 f"def sym{cid}(): pass", f"h{cid}", 4, cat),
+            )
+            conn.execute(
+                "INSERT INTO nodes (id, kind, name, short_name, file_path, "
+                "start_line, end_line, chunk_id) VALUES (?,?,?,?,?,?,?,?)",
+                (cid, "function", f"sym{cid}", f"sym{cid}", fp, 1, 10, cid),
+            )
+        # Edge from seed (node id=1) to meta neighbor (node id=2)
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?,?,?,?)",
+            (1, 2, "calls", 1.0),
+        )
+        # Edge from seed (node id=1) to source neighbor (node id=3)
+        conn.execute(
+            "INSERT INTO edges (src, dst, kind, weight) VALUES (?,?,?,?)",
+            (1, 3, "calls", 1.0),
+        )
+        conn.commit()
+
+        result = Q._graph_expand(conn, [1])
+        # source neighbor (chunk id=3) must be present; meta neighbor (chunk id=2) must not.
+        assert 3 in result, "source neighbor chunk must be returned by _graph_expand"
+        assert 2 not in result, "meta neighbor chunk must NOT be returned by _graph_expand"
+    finally:
+        conn.close()
+
+
 def test_bm25_and_dense_accept_a_category_filter(tmp_path, monkeypatch):
     import numpy as np
     from cbv import db, embedder, quantize
