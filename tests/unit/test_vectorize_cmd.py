@@ -355,6 +355,8 @@ def test_vectorize_populates_embedding_cache_on_first_run(tmp_home, source_repo,
     assert cache_rows == distinct_cached_chunks
     assert blob["embedding_cache_hit_rate"] == 0.0
     assert manifest["embedding_cache_hit_rate"] == 0.0
+    from cbv import db
+    assert manifest["schema_version"] == db.SCHEMA_VERSION
 
 
 def test_vectorize_reuses_embedding_cache_on_second_identical_run(

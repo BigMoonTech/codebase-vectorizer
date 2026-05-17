@@ -1173,5 +1173,5 @@ def _build_manifest(repo_name, repo_origin, src_dir, repo_dir, db_path,
         "chunks_indexed": chunks_indexed,
         "embedding_cache_hit_rate": embedding_cache_hit_rate,
         "warnings": warnings,
-        "schema_version": "1.0",
+        "schema_version": db.SCHEMA_VERSION,
     }
