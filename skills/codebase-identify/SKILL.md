@@ -9,7 +9,7 @@ description: >
   user instead wants to understand how code works or how things relate, use the
   codebase-ask skill.
 metadata:
-  version: "1.0.1"
+  version: "1.1.0"
 ---
 
 # Codebase Identify
