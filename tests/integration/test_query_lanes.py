@@ -156,7 +156,13 @@ def test_full_lane_keeps_a_source_chunk_above_a_swarm_of_docs(tmp_path, monkeypa
     try:
         db.init_schema(conn)
         emb = embedder.make_embedder()
-        rows = [("src/clusters.py", "source", "call umap reduce dimensionality")]
+        # The source chunk shares only a couple of query tokens, so it is
+        # lexically far weaker than the docs swarm. Each docs chunk's content
+        # is EXACTLY EQUAL to the query string -> identical stub embedding
+        # (distance 0) and a perfect BM25 match. Pre-Task-9, the category-blind
+        # top-50 BM25/dense lanes are entirely filled by docs and the source
+        # chunk never enters the candidate pool.
+        rows = [("src/clusters.py", "source", "codebase call entrypoint helper")]
         rows += [
             (f"docs/plan_{i}.md", "docs", "how does the codebase call things")
             for i in range(60)
@@ -179,7 +185,7 @@ def test_full_lane_keeps_a_source_chunk_above_a_swarm_of_docs(tmp_path, monkeypa
         conn.close()
 
     ns = argparse.Namespace(
-        repo="polltest", question="how does the codebase call umap",
+        repo="polltest", question="how does the codebase call things",
         # top_k=100 returns the whole 61-chunk candidate pool. Task 9 is a
         # pool-composition fix, so this test verifies pool membership. The stub
         # reranker scores by naive lexical overlap and would rank the docs
