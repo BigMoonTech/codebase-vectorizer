@@ -137,6 +137,64 @@ def test_full_lane_ppr_uses_seed_plus_expansion_as_bounded_candidates(
     assert set(captured["candidates"]) == set(captured["seed"]) | set(captured["expansion"])
 
 
+def test_full_lane_keeps_a_source_chunk_above_a_swarm_of_docs(tmp_path, monkeypatch):
+    """A lone source chunk must survive a candidate pool flooded with docs."""
+    import argparse
+    import io
+    import json
+    import sys
+    from cbv import db, embedder, quantize
+    from cbv.commands import query as Q
+    from cbv import paths
+
+    monkeypatch.setenv("CBV_STUB_EMBEDDER", "1")
+    monkeypatch.setenv("CBV_STUB_RERANKER", "1")
+    monkeypatch.setenv("CODEBASE_VECTORIZER_HOME", str(tmp_path / "home"))
+    repo_dir = paths.repo_dir("polltest")
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    conn = db.open_db(repo_dir / "index.sqlite")
+    try:
+        db.init_schema(conn)
+        emb = embedder.make_embedder()
+        rows = [("src/clusters.py", "source", "call umap reduce dimensionality")]
+        rows += [
+            (f"docs/plan_{i}.md", "docs", "how does the codebase call things")
+            for i in range(60)
+        ]
+        for cid, (fp, cat, content) in enumerate(rows, start=1):
+            conn.execute(
+                "INSERT INTO chunks (id, file_path, language, kind, name, "
+                "ast_path, start_line, end_line, start_byte, end_byte, content, "
+                "content_hash, token_count, category) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (cid, fp, "python" if cat == "source" else "markdown", "window",
+                 None, None, 1, 1, 0, len(content), content, f"h{cid}",
+                 len(content.split()), cat),
+            )
+            q8 = quantize.quantize_int8(emb.embed([content])[0].reshape(1, -1))[0]
+            db.insert_embedding(conn, cid, q8)
+        db.write_meta(conn, "schema_version", db.SCHEMA_VERSION)
+        conn.commit()
+    finally:
+        conn.close()
+
+    ns = argparse.Namespace(
+        repo="polltest", question="how does the codebase call umap",
+        lane="full", top_k=10,
+    )
+    buf = io.StringIO()
+    old = sys.stdout
+    sys.stdout = buf
+    try:
+        rc = Q.run(ns)
+    finally:
+        sys.stdout = old
+    assert rc == 0
+    result = json.loads(buf.getvalue().strip().splitlines()[-1])
+    files = [r["file_relative"] for r in result["results"]]
+    assert "src/clusters.py" in files
+
+
 def test_bm25_and_dense_accept_a_category_filter(tmp_path, monkeypatch):
     import numpy as np
     from cbv import db, embedder, quantize
