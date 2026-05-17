@@ -1,12 +1,16 @@
-import importlib
+from __future__ import annotations
 
+import sys
+from pathlib import Path
 
-def _classify():
-    return importlib.import_module("cbv.classify").classify
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from cbv.classify import classify  # noqa: E402
 
 
 def test_classifies_the_concrete_pollution_examples():
-    classify = _classify()
     cases = {
         "scripts/cbv/clusters.py": "source",
         "src/app/main.go": "source",

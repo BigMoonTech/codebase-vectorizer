@@ -39,6 +39,7 @@ _CONFIG_EXTS = {".toml", ".ini", ".cfg", ".lock", ".yaml", ".yml", ".json"}
 def classify(relpath: str) -> str:
     """Return the file-kind category for a repo-relative POSIX path."""
     p = PurePosixPath(relpath)
+    # p.parts includes the filename itself when the path has no parent dir.
     segs = {s.lower() for s in p.parts}
     name = p.name.lower()
     ext = p.suffix.lower()
